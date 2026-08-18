@@ -1,6 +1,0 @@
-return {
-	categories = {
-		'render',
-		'world'
-	}
-}

@@ -1,5 +1,0 @@
-return {
-	files = {
-		'proximitypromptesp.lua'
-	}
-}
