@@ -1,4 +1,4 @@
 return {
 	init = 'teleport.lua',
-	categories = {'combat', 'render', 'minigames'}
+	categories = {'combat', 'render'}
 }

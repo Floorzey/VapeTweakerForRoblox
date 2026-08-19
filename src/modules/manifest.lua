@@ -1,3 +1,3 @@
 return {
-	categories = {'render', 'network'}
+	categories = {'render'}
 }

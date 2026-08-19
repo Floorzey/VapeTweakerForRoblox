@@ -193,63 +193,13 @@ return function(ctx)
 		return self.index[name]
 	end
 
-	local custom = {
-		minigames = {name = 'Minigames', icon = 'rbxassetid://118917453153459', size = UDim2.fromOffset(17, 17)},
-		network = {name = 'Network', icon = 'rbxassetid://97983828696086', size = UDim2.fromOffset(17, 17)}
-	}
-
-	local function makecat(cat)
-		local data = custom[cat]
-		if not data then return nil end
-		if api.flavor ~= 'new' or type(api.object.CreateCategory) ~= 'function' then return nil end
-		local x = 6
-		local y = 60
-		for _, val in pairs(api.object.Categories or {}) do
-			if type(val) == 'table' and val.Type == 'Category' and typeof(val.Object) == 'Instance' then
-				local pos = val.Object.Position
-				if pos.X.Offset >= x then
-					x = pos.X.Offset
-					y = pos.Y.Offset
-				end
-			end
-		end
-		local host = api.object:CreateCategory({
-			Name = data.name,
-			Icon = data.icon,
-			Size = data.size
-		})
-		if type(host) ~= 'table' then return nil end
-		if typeof(host.Object) == 'Instance' then host.Object.Position = UDim2.fromOffset(x + 230, y) end
-		ctx:clean(function()
-			if host.Button and host.Button.Enabled and type(host.Button.Toggle) == 'function' then
-				pcall(host.Button.Toggle, host.Button)
-			end
-			local main = api.object.Categories and api.object.Categories.Main
-			if main and type(main.Buttons) == 'table' and main.Buttons[data.name] == host.Button then
-				main.Buttons[data.name] = nil
-			end
-			if api.object.Categories and api.object.Categories[data.name] == host then
-				api.object.Categories[data.name] = nil
-			end
-			if host.Button and type(host.Button.Destroy) == 'function' then pcall(host.Button.Destroy, host.Button) end
-			if typeof(host.Object) == 'Instance' then pcall(host.Object.Destroy, host.Object) end
-		end)
-		return host
-	end
 
 	function api:category(cat)
 		cat = lowercat(cat)
 		if not cat then return nil end
 		if cat == 'legit' and type(self.object.Legit) == 'table' then return self.object.Legit end
 		local name = ctx.cats.names[cat]
-		local host = self.object.Categories[name]
-		if host == nil then host = makecat(cat) end
-		return host
-	end
-
-	function api:ensurecats()
-		self:category('minigames')
-		self:category('network')
+		return self.object.Categories[name]
 	end
 
 	function api:add(name, cat, mod)
