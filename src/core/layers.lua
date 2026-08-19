@@ -157,6 +157,11 @@ return function(ctx)
 	end
 
 	local function gameload()
+		if ctx.loader.games == false then
+			ctx.supportedgame = false
+			ctx.gamefolder = nil
+			return 0
+		end
 		local list = scan()
 		if type(list) ~= 'table' then
 			ctx.supportedgame = false

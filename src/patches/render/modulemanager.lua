@@ -79,12 +79,6 @@ return function(ctx)
 			local ok, value = pcall(isfile, full)
 			present = ok and value == true
 		end
-		if not present and full and ctx.store.fs.write then
-			local ok, body = pcall(game.HttpGet, game, ctx.loader.base..'/'..rel, true)
-			if ok and type(body) == 'string' and #body > 8 then
-				present = ctx.store:write(rel, body)
-			end
-		end
 		local get = vape.Libraries and vape.Libraries.getcustomasset or getcustomasset
 		if present and type(get) == 'function' then
 			local ok, value = pcall(get, full)
@@ -102,6 +96,23 @@ return function(ctx)
 	local favoriteofftab = asset('favoriteofftab.png')
 	local hiddeneyeoff = asset('hiddeneyeoff.png')
 	local editasset = asset('edit.png')
+
+	local function fetch(name, done)
+		if assets[name] ~= '' then return end
+		task.spawn(function()
+			local rel = 'assets/gui/'..name
+			local full = ctx.store:path(rel)
+			if not full or not ctx.store.fs.write then return end
+			local ok, body = pcall(game.HttpGet, game, ctx.loader.base..'/'..rel, true)
+			if not ok or type(body) ~= 'string' or #body <= 8 or not ctx.store:write(rel, body) then return end
+			local get = vape.Libraries and vape.Libraries.getcustomasset or getcustomasset
+			if type(get) ~= 'function' then return end
+			local got, value = pcall(get, full)
+			if not got or type(value) ~= 'string' or value == '' then return end
+			assets[name] = value
+			if alive and type(done) == 'function' then done(value) end
+		end)
+	end
 
 	local function getpalette()
 		if palette then return palette end
@@ -202,19 +213,20 @@ return function(ctx)
 	local function starvisual(star, active, hover)
 		if not isinst(star) then return end
 		local pal = getpalette()
-		if star:IsA('ImageButton') or star:IsA('ImageLabel') then
-			star.Image = active and favoriteon or favoriteoff
-			tween(star, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		local image = (star:IsA('ImageButton') or star:IsA('ImageLabel')) and star or star:FindFirstChild('VTImage')
+		if image and (image:IsA('ImageButton') or image:IsA('ImageLabel')) then
+			image.Image = active and favoriteon or favoriteoff
+			tween(image, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				ImageColor3 = active and Color3.new(1, 1, 1)
 					or hover and dark(pal.text, 0.16) or light(pal.main, 0.37),
 				ImageTransparency = 0
 			})
-		else
-			tween(star, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-				TextColor3 = active and activecolor()
-					or hover and dark(pal.text, 0.16) or light(pal.main, 0.37)
-			})
+			return
 		end
+		tween(star, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			TextColor3 = active and activecolor()
+				or hover and dark(pal.text, 0.16) or light(pal.main, 0.37)
+		})
 	end
 
 	local function placeid()
@@ -274,6 +286,7 @@ return function(ctx)
 		vape.Favorites.List = tolist(state.favorites)
 		vape.Favorites.Rows = rows
 		vape.Favorites.StarButton = favbutton
+		vape.Favorites.Window = fav
 		vape.Hidden = vape.Hidden or {}
 		vape.Hidden.List = tolist(state.hidden)
 		vape.Hidden.Editing = state.editing
@@ -939,6 +952,71 @@ return function(ctx)
 		mod.Favorited = isfavorite(mod.Name)
 	end
 
+	local function guicolor()
+		local gui = vape.GUIColor
+		return tonumber(gui and gui.Hue) or 0, tonumber(gui and gui.Sat) or 0, tonumber(gui and gui.Value) or 1, gui and gui.Rainbow == true
+	end
+
+	local function vapecolor(h)
+		if type(vape.Color) == 'function' then
+			local ok, a, b, c = pcall(vape.Color, vape, h)
+			if ok then return Color3.fromHSV(a, b, c) end
+		end
+		return Color3.fromHSV(h, 1, 1)
+	end
+
+	local function vapetext(h, s, v, rainbow)
+		if rainbow then return Color3.new(0.19, 0.19, 0.19) end
+		if type(vape.TextColor) == 'function' then
+			local ok, col = pcall(vape.TextColor, vape, h, s, v)
+			if ok and typeof(col) == 'Color3' then return col end
+		end
+		return Color3.new(1, 1, 1)
+	end
+
+	local function paintfavoriterow(data, mod)
+		if not data or type(mod) ~= 'table' or not isinst(data.row) then return end
+		local pal = getpalette()
+		if not mod.Enabled then
+			data.gradient.Enabled = false
+			if not data.hover then
+				data.row.TextColor3 = dark(pal.text, 0.16)
+				data.row.BackgroundColor3 = pal.main
+				data.dots.ImageColor3 = light(pal.main, 0.37)
+			end
+			data.bindicon.ImageColor3 = dark(pal.text, 0.43)
+			data.bindtext.TextColor3 = dark(pal.text, 0.43)
+			return
+		end
+		local h, s, v, rainbow = guicolor()
+		local mode = vape.RainbowMode and vape.RainbowMode.Value or 'Normal'
+		local sweep = rainbow and mode ~= 'Retro'
+		local index = math.max(tonumber(data.index) or 0, 0)
+		local text = vapetext(h, s, v, rainbow)
+		if sweep then
+			local h1 = (h - (index * 0.025)) % 1
+			local h2 = (h - ((index + 1) * 0.025)) % 1
+			if mode == 'Gradient' then
+				data.row.BackgroundColor3 = Color3.new(1, 1, 1)
+				data.gradient.Enabled = true
+				data.gradient.Color = ColorSequence.new({
+					ColorSequenceKeypoint.new(0, vapecolor(h1)),
+					ColorSequenceKeypoint.new(1, vapecolor(h2))
+				})
+			else
+				data.gradient.Enabled = false
+				data.row.BackgroundColor3 = vapecolor(h1)
+			end
+		else
+			data.gradient.Enabled = false
+			data.row.BackgroundColor3 = Color3.fromHSV(h, s, v)
+		end
+		data.row.TextColor3 = text
+		data.dots.ImageColor3 = text
+		data.bindicon.ImageColor3 = text
+		data.bindtext.TextColor3 = text
+	end
+
 	local function updatebindpreview(data)
 		if not data or not isinst(data.bind) then return end
 		if state.editing then
@@ -1165,7 +1243,6 @@ return function(ctx)
 		local data = rows[name]
 		local mod = vape.Modules[name]
 		if not data or type(mod) ~= 'table' or not isinst(data.row) then return end
-		local pal = getpalette()
 		local hidden = ishidden(name)
 		data.row.Visible = state.editing or not hidden
 		data.row.Text = state.editing and ('    '..mod.Name:gsub(' ', ''))
@@ -1176,33 +1253,7 @@ return function(ctx)
 		updatehiddenbox(data.hiddenbox, data.outline, data.fill, hidden, mod)
 		if state.editing then data.bind.Visible = false end
 
-		local source = decorated[mod]
-		local srcrow = source and source.row
-		local srcgradient = srcrow and srcrow:FindFirstChildWhichIsA('UIGradient')
-		if mod.Enabled and srcrow then
-			data.row.TextColor3 = srcrow.TextColor3
-			data.row.BackgroundColor3 = srcrow.BackgroundColor3
-			if srcgradient then
-				data.gradient.Enabled = srcgradient.Enabled
-				data.gradient.Color = srcgradient.Color
-			end
-			local sourcedots = source.dots and source.dots:FindFirstChild('Dots')
-			if sourcedots then data.dots.ImageColor3 = sourcedots.ImageColor3 end
-			local sourcebind = source.bind
-			local sourcebindicon = sourcebind and sourcebind:FindFirstChild('Icon')
-			local sourcebindtext = sourcebind and sourcebind:FindFirstChildWhichIsA('TextLabel')
-			if sourcebindicon then data.bindicon.ImageColor3 = sourcebindicon.ImageColor3 end
-			if sourcebindtext then data.bindtext.TextColor3 = sourcebindtext.TextColor3 end
-		else
-			data.gradient.Enabled = false
-			if not data.hover then
-				data.row.TextColor3 = dark(pal.text, 0.16)
-				data.row.BackgroundColor3 = pal.main
-				data.dots.ImageColor3 = light(pal.main, 0.37)
-			end
-			data.bindicon.ImageColor3 = dark(pal.text, 0.43)
-			data.bindtext.TextColor3 = dark(pal.text, 0.43)
-		end
+		paintfavoriterow(data, mod)
 		updatebindpreview(data)
 	end
 
@@ -1221,6 +1272,7 @@ return function(ctx)
 				createfavoriterow(mod)
 				local data = rows[name]
 				if data then
+					data.index = order - 1
 					data.row.LayoutOrder = order * 2
 					if data.moddata.favoriteopen and isinst(data.moddata.children) then
 						data.moddata.children.LayoutOrder = order * 2 + 1
@@ -1332,6 +1384,7 @@ return function(ctx)
 		if oldbutton and isinst(oldbutton.Object) then oldbutton.Object:Destroy() end
 		local main = vape.Categories.Main
 		if main and type(main.Buttons) == 'table' then main.Buttons.Favorites = nil end
+		if vape.Categories.Favorites == fav then vape.Categories.Favorites = nil end
 		fav.Button = {
 			Enabled = false,
 			Toggle = function(buttonapi)
@@ -1374,7 +1427,7 @@ return function(ctx)
 	addfavoritesbutton()
 	applyfavoritewindow()
 
-	vape.Favorites = {List = {}, Rows = rows, StarButton = favbutton}
+	vape.Favorites = {List = {}, Rows = rows, StarButton = favbutton, Window = fav}
 	vape.Hidden = {List = {}, Editing = false}
 	vape.IsFavorite = function(_, name) return isfavorite(name) end
 	vape.GetFavoriteStarAsset = function(_, enabled) return enabled and favoriteon or favoriteoff end
@@ -1406,6 +1459,44 @@ return function(ctx)
 	vape.SetHiddenEditing = function(_, enabled) setediting(enabled) end
 	vape.SetHidden = function(_, name, enabled, skipsave) sethidden(name, enabled, skipsave) end
 	syncapi()
+	fetch('favoriteoff.png', function(value)
+		favoriteoff = value
+		if isinst(favbutton) then
+			if favbutton:IsA('ImageButton') then
+				favbutton.Image = value
+			elseif favbutton:IsA('TextButton') then
+				local image = favbutton:FindFirstChild('VTImage') or Instance.new('ImageLabel')
+				image.Name = 'VTImage'
+				image.BackgroundTransparency = 1
+				image.Size = UDim2.fromScale(1, 1)
+				image.Parent = favbutton
+				favbutton.Text = ''
+			end
+			starvisual(favbutton, fav and fav.Button and fav.Button.Enabled, vape.Favorites and vape.Favorites.StarButtonHovered)
+		end
+	end)
+	fetch('favoriteon.png', function(value)
+		favoriteon = value
+		if isinst(favbutton) then starvisual(favbutton, fav and fav.Button and fav.Button.Enabled, false) end
+	end)
+	fetch('favoriteofftab.png', function(value)
+		favoriteofftab = value
+		local icon = fav and isinst(fav.Object) and (fav.Object:FindFirstChild('Icon') or fav.Object:FindFirstChildWhichIsA('ImageLabel'))
+		if icon then icon.Image = value end
+	end)
+	fetch('hiddeneyeoff.png', function(value)
+		hiddeneyeoff = value
+		for _, data in pairs(headers) do
+			local eye = data.count and data.count:FindFirstChild('Eye')
+			if eye then eye.Image = value end
+		end
+	end)
+	fetch('edit.png', function(value)
+		editasset = value
+		for _, data in pairs(headers) do
+			if data.editicon then data.editicon.Image = value end
+		end
+	end)
 
 	local function scan()
 		if migrate then
@@ -1453,6 +1544,13 @@ return function(ctx)
 	end
 	local scanclock = 0
 	local syncclock = 0
+	ctx:clean(runservice.RenderStepped:Connect(function()
+		if not alive or not fav or not isinst(fav.Object) or not fav.Object.Visible then return end
+		for name, data in pairs(rows) do
+			local mod = vape.Modules[name]
+			if type(mod) == 'table' then paintfavoriterow(data, mod) end
+		end
+	end))
 	ctx:clean(runservice.Heartbeat:Connect(function(dt)
 		scanclock = scanclock + dt
 		syncclock = syncclock + dt

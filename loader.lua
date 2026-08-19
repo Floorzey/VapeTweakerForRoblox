@@ -2,8 +2,8 @@ local env = (getgenv and getgenv()) or _G
 local rawcfg = type(env.VapeTweakerConfig) == 'table' and env.VapeTweakerConfig or {}
 local compile = loadstring
 local http = game:GetService('HttpService')
-local ver = '1.2.0'
-local build = '1.2.0'
+local ver = '1.2.2'
+local build = '1.2.2'
 
 local function pick(low, high, default)
 	local val = rawcfg[low]
@@ -89,40 +89,7 @@ local function fresh(url)
 end
 if not cfg.localdev or cfg.localfallback then
 	local owner, repo, ref = requestbase:match('^https://raw%.githubusercontent%.com/([^/]+)/([^/]+)/([^/]+)$')
-	if owner and repo and (ref == 'main' or ref == 'master') then
-		moving = true
-		local sha
-		local function resolvesha(url, refmode)
-			local ok, raw = pcall(game.HttpGet, game, fresh(url), true)
-			if not ok or type(raw) ~= 'string' then return nil end
-			local decoded, data = pcall(http.JSONDecode, http, raw)
-			if not decoded or type(data) ~= 'table' then return nil end
-			local value = refmode and data.object and data.object.sha or data.sha
-			if type(value) == 'string' and value:match('^[%da-fA-F]+$') and #value == 40 then return value end
-		end
-		sha = resolvesha('https://api.github.com/repos/'..owner..'/'..repo..'/git/ref/heads/'..ref, true)
-			or resolvesha('https://api.github.com/repos/'..owner..'/'..repo..'/commits/'..ref, false)
-		if sha then
-			cfg.base = 'https://raw.githubusercontent.com/'..owner..'/'..repo..'/'..sha
-			immutable = true
-		end
-		if immutable then
-			local rel = '/src/modules/manifest.lua'
-			local branchok, branch = pcall(game.HttpGet, game, fresh(requestbase..rel), true)
-			local commitok, commit = pcall(game.HttpGet, game, cfg.base..rel, true)
-			if branchok and type(branch) == 'string' and branch ~= ''
-				and (not commitok or type(commit) ~= 'string' or commit ~= branch) then
-				loaderrors[#loaderrors + 1] = {
-					time = os.clock(),
-					kind = 'revision',
-					path = requestbase,
-					message = 'stale revision response; using live branch'
-				}
-				cfg.base = requestbase
-				immutable = false
-			end
-		end
-	end
+	moving = owner ~= nil and repo ~= nil and (ref == 'main' or ref == 'master')
 end
 
 local function variant(path, tag)
@@ -186,6 +153,51 @@ for _, path in ipairs({
 }) do
 	mkdir(path)
 end
+
+local pack
+local packfrom
+local packpath = join(cfg.root, 'cache/bundle.lua')
+
+local function unpack(raw)
+	if type(raw) ~= 'string' or raw == '' or type(compile) ~= 'function' then return nil end
+	local fn = compile(raw, '@vapetweaker/'..build..'/bundle.lua')
+	if type(fn) ~= 'function' then return nil end
+	local ok, data = pcall(fn)
+	if not ok or type(data) ~= 'table' or data.build ~= build or type(data.files) ~= 'table' then return nil end
+	local count = 0
+	for path, body in pairs(data.files) do
+		if type(path) ~= 'string' or norm(path) ~= path or type(body) ~= 'string' or body == '' then return nil end
+		count += 1
+	end
+	if count == 0 then return nil end
+	return data
+end
+
+local function loadpack()
+	if cfg.localdev and not cfg.localfallback then return end
+	local url = requestbase..'/bundle.lua'
+	if moving then url = fresh(url) end
+	local ok, raw = pcall(game.HttpGet, game, url, true)
+	if ok then
+		local data = unpack(raw)
+		if data then
+			pack = data
+			packfrom = 'bundle'
+			if cfg.cache then write(packpath, raw) end
+			return
+		end
+	end
+	if cfg.cache then
+		local cached = read(packpath)
+		local data = unpack(cached)
+		if data then
+			pack = data
+			packfrom = 'bundle-cache'
+		end
+	end
+end
+
+loadpack()
 
 local meta = {}
 local metapath = join(cfg.root, 'cache/meta.json')
@@ -258,14 +270,18 @@ local ld = {
 	base = cfg.base,
 	misses = {},
 	pending = {},
-	stats = {remote = 0, cache = 0, localdev = 0, missing = 0, requested = 0},
+	stats = {remote = 0, cache = 0, bundle = 0, localdev = 0, missing = 0, requested = 0},
 	meta = meta,
 	cachevalid = cacheok,
 	errors = loaderrors,
 	immutable = immutable,
 	moving = moving,
 	metaraw = metaraw,
-	requestbase = requestbase
+	requestbase = requestbase,
+	pack = pack and pack.files or nil,
+	packfrom = packfrom,
+	games = pack and pack.games,
+	mode = packfrom
 }
 
 function ld:active()
@@ -379,6 +395,10 @@ local function source(path, optional)
 	ld.stats.requested = ld.stats.requested + 1
 	local data, from = localfile(path)
 	if data then return data, from end
+	if ld.pack and type(ld.pack[path]) == 'string' then
+		ld.stats.bundle += 1
+		return ld.pack[path], ld.packfrom or 'bundle'
+	end
 	if cfg.localdev and not cfg.localfallback then
 		ld.misses[path] = true
 		ld.stats.missing = ld.stats.missing + 1
@@ -407,13 +427,8 @@ local function source(path, optional)
 		error('missing remote source: '..path, 0)
 	end
 
-	if ld.mode == nil then
-		data, from = cachefile(path)
-		if data then
-			ld.mode = 'cache'
-			return data, from
-		end
-	end
+	data, from = cachefile(path)
+	if data then return data, from end
 	if optional and state == 'missing' then return nil, 'missing' end
 	error('source unavailable: '..path..' ('..tostring(detail)..')', 0)
 end

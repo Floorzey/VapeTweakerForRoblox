@@ -13,12 +13,6 @@ return function(ctx)
 		local ok, val = pcall(isfile, iconpath)
 		present = ok and val == true
 	end
-	if not present and iconpath and ctx.store.fs.write then
-		local ok, body = pcall(game.HttpGet, game, ctx.loader.base..'/assets/crosshair.png', true)
-		if ok and type(body) == 'string' and #body > 8 then
-			present = ctx.store:write('assets/crosshair.png', body)
-		end
-	end
 	local asset = vape.Libraries and vape.Libraries.getcustomasset or getcustomasset
 	if present and type(asset) == 'function' then
 		local ok, val = pcall(asset, iconpath)
@@ -250,6 +244,21 @@ return function(ctx)
 			if holder then holder.Visible = on end
 		end
 	})
+
+	if not present and iconpath and ctx.store.fs.write then
+		task.spawn(function()
+			local ok, body = pcall(game.HttpGet, game, ctx.loader.base..'/assets/crosshair.png', true)
+			if not ok or type(body) ~= 'string' or #body <= 8 or not ctx.store:write('assets/crosshair.png', body) then return end
+			local get = vape.Libraries and vape.Libraries.getcustomasset or getcustomasset
+			if type(get) ~= 'function' then return end
+			local got, val = pcall(get, iconpath)
+			if not got or type(val) ~= 'string' or val == '' or not overlay or not overlay.Object then return end
+			local head = overlay.Object:FindFirstChildWhichIsA('ImageLabel')
+			local button = overlay.Button and overlay.Button.Object and overlay.Button.Object:FindFirstChild('Icon')
+			if head then head.Image = val end
+			if button then button.Image = val end
+		end)
+	end
 
 	ctx:clean(function()
 		if type(vape.Overlays) == 'table' and type(vape.Overlays.Toggles) == 'table' then
