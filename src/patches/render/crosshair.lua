@@ -268,13 +268,13 @@ return function(ctx)
 	holder = Instance.new('Frame')
 	holder.Name = 'Crosshair'
 	holder.Size = UDim2.fromOffset(160, 160)
-	holder.Position = UDim2.fromOffset(110, 0)
+	holder.Position = UDim2.fromOffset(110, 41)
 	holder.AnchorPoint = Vector2.new(0.5, 0.5)
 	holder.BackgroundTransparency = 1
 	holder.BorderSizePixel = 0
 	holder.Visible = false
 	holder.ZIndex = 1000000
-	holder.Parent = overlay.Children
+	holder.Parent = overlay.Object
 
 	style = overlay:CreateDropdown({
 		Name = 'Style',

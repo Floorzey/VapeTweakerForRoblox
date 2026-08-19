@@ -1240,19 +1240,25 @@ return function(ctx)
 		if isinst(favbutton) then return end
 		local main = vape.Categories.Main
 		local root = main and main.Object
-		local children = root and root:FindFirstChild('Children')
-		local bar = children and children:FindFirstChild('Overlays')
+		local bar = root and root:FindFirstChild('Overlays', true)
 		if not isinst(bar) then return end
 		local old = bar:FindFirstChild('FavoritesButton')
 		if old then old:Destroy() end
-		local button = Instance.new('ImageButton')
+		local button = Instance.new(favoriteoff ~= '' and 'ImageButton' or 'TextButton')
 		button.Name = 'FavoritesButton'
 		button.Size = UDim2.fromOffset(21, 21)
 		button.Position = UDim2.new(1, -52, 0, 8)
 		button.BackgroundTransparency = 1
 		button.AutoButtonColor = false
-		button.Image = favoriteoff
-		button.ImageColor3 = light(getpalette().main, 0.37)
+		if button:IsA('ImageButton') then
+			button.Image = favoriteoff
+			button.ImageColor3 = light(getpalette().main, 0.37)
+		else
+			button.Text = '★'
+			button.TextSize = 22
+			button.FontFace = getpalette().semibold
+			button.TextColor3 = light(getpalette().main, 0.37)
+		end
 		button.Parent = bar
 		favbutton = button
 		ctx:clean(button.MouseEnter:Connect(function()
