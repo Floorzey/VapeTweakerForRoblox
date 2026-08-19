@@ -14,23 +14,6 @@
 loadstring(game:HttpGet('https://raw.githubusercontent.com/Floorzey/VapeTweakerForRoblox/main/loader.lua', true))()
 ```
 
-# Game modules
-
-Game-specific modules do not use manifests or a game list. Put each module directly in the current PlaceId folder:
-
-```text
-src/games/<placeid>/<module>.lua
-```
-
-Example:
-
-```text
-src/games/6872274481/killaura.lua
-src/games/6872274481/fastbreak.lua
-```
-
-The loader discovers the folder from `game.PlaceId` and loads every `.lua` file inside it.
-
 # Credits
 
 7GrandDadPGN (Vape Owner)
