@@ -1,5 +1,6 @@
 return {
 	files = {
-		'silentaimfix.lua'
+		'silentaimfix.lua',
+		'silentaimsettings.lua'
 	}
 }

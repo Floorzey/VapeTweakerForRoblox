@@ -1,5 +1,5 @@
 return {
-	build = '1.2.2',
+	build = '1.2.3',
 	games = false,
 	files = {
 		['src/adapters/vape.lua'] = [=[return function(ctx)
@@ -780,7 +780,7 @@ return {
 	ctx.vapeapi = api
 end
 ]=],
-		['src/categories.lua'] = [[return {
+		['src/categories.lua'] = [=[return {
 	order = {
 		'combat',
 		'blatant',
@@ -800,8 +800,8 @@ end
 		legit = 'Legit'
 	}
 }
-]],
-		['src/core/clean.lua'] = [[return function(ctx)
+]=],
+		['src/core/clean.lua'] = [=[return function(ctx)
 	local bin = {items = {}, dead = false}
 
 	local function dispose(obj)
@@ -878,8 +878,8 @@ end
 		return self.bin:add(obj)
 	end
 end
-]],
-		['src/core/config.lua'] = [[return function(ctx)
+]=],
+		['src/core/config.lua'] = [=[return function(ctx)
 	local scopes = {'universal', 'game', 'build', 'place'}
 	local rank = {universal = 1, game = 2, build = 3, place = 4}
 	local config = {
@@ -1577,8 +1577,8 @@ end
 	config:setpaths()
 	ctx.config = config
 end
-]],
-		['src/core/layers.lua'] = [[return function(ctx)
+]=],
+		['src/core/layers.lua'] = [=[return function(ctx)
 	local http = game:GetService('HttpService')
 	local seen = {}
 	local tree
@@ -1786,8 +1786,8 @@ end
 		gameload()
 	end
 end
-]],
-		['src/core/log.lua'] = [[return function(ctx)
+]=],
+		['src/core/log.lua'] = [=[return function(ctx)
 	local log = {history = {}, limit = 200}
 
 	local function trim(msg)
@@ -1820,7 +1820,7 @@ end
 
 	ctx.log = log
 end
-]],
+]=],
 		['src/core/patch.lua'] = [=[return function(ctx)
 	local sys = {
 		states = setmetatable({}, {__mode = 'k'}),
@@ -2236,7 +2236,7 @@ end
 	ctx.patchsys = sys
 end
 ]=],
-		['src/core/profile.lua'] = [[return function(ctx)
+		['src/core/profile.lua'] = [=[return function(ctx)
 	local prof = {name = 'default', dir = 'default'}
 
 	local function canonical(name)
@@ -2308,8 +2308,8 @@ end
 		return self.profile:select(name)
 	end
 end
-]],
-		['src/core/runtime.lua'] = [[return function(ctx)
+]=],
+		['src/core/runtime.lua'] = [=[return function(ctx)
 	local function category(cat)
 		if type(cat) ~= 'string' then return nil end
 		cat = cat:lower()
@@ -2537,8 +2537,8 @@ end
 		return complete
 	end
 end
-]],
-		['src/core/storage.lua'] = [[return function(ctx)
+]=],
+		['src/core/storage.lua'] = [=[return function(ctx)
 	local http = game:GetService('HttpService')
 	local store = {root = ctx.loader.root, dirs = {}}
 
@@ -2682,8 +2682,8 @@ end
 
 	ctx.store = store
 end
-]],
-		['src/core/target.lua'] = [[return function(ctx)
+]=],
+		['src/core/target.lua'] = [=[return function(ctx)
 	local function file(path)
 		if type(isfile) ~= 'function' then return nil end
 		local ok, val = pcall(isfile, path)
@@ -2715,8 +2715,8 @@ end
 		return self.target
 	end
 end
-]],
-		['src/init.lua'] = [[local ld = ...
+]=],
+		['src/init.lua'] = [=[local ld = ...
 if type(ld) ~= 'table' or type(ld.run) ~= 'function' then error('invalid VapeTweaker loader', 0) end
 
 local env = (getgenv and getgenv()) or _G
@@ -2847,18 +2847,18 @@ end
 env.VapeTweaker = ctx
 ctx.vapeapi:notify('VapeTweaker', 'Loaded', 4, 'info')
 return ctx
-]],
-		['src/modules/manifest.lua'] = [[return {
+]=],
+		['src/modules/manifest.lua'] = [=[return {
 	categories = {'render'}
 }
-]],
-		['src/modules/render/manifest.lua'] = [[return {
+]=],
+		['src/modules/render/manifest.lua'] = [=[return {
 	files = {
 		'proximitypromptesp.lua'
 	}
 }
-]],
-		['src/modules/render/proximitypromptesp.lua'] = [[return function(ctx)
+]=],
+		['src/modules/render/proximitypromptesp.lua'] = [=[return function(ctx)
 	local players = game:GetService('Players')
 	local run = game:GetService('RunService')
 	local input = game:GetService('UserInputService')
@@ -3241,14 +3241,15 @@ return ctx
 		end
 	})
 end
-]],
-		['src/patches/combat/manifest.lua'] = [[return {
+]=],
+		['src/patches/combat/manifest.lua'] = [=[return {
 	files = {
-		'silentaimfix.lua'
+		'silentaimfix.lua',
+		'silentaimsettings.lua'
 	}
 }
-]],
-		['src/patches/combat/silentaimfix.lua'] = [[
+]=],
+		['src/patches/combat/silentaimfix.lua'] = [=[
 return function(ctx)
 	local patch = ctx:patch('SilentAim', 'SilentAimfix', 'combat')
 	if not patch then return end
@@ -3524,13 +3525,94 @@ return function(ctx)
 		error('SilentAim Ray transform could not be patched', 0)
 	end
 end
-]],
-		['src/patches/manifest.lua'] = [[return {
+]=],
+		['src/patches/combat/silentaimsettings.lua'] = [=[return function(ctx)
+	if ctx.vapeapi.flavor ~= 'new' then return end
+	local vape = ctx.vape
+	local mod = ctx:find('SilentAim', 'combat') or ctx:find('SilentAim')
+	if type(mod) ~= 'table' or type(mod.Options) ~= 'table' then
+		ctx.log:add('patch', 'SilentAimSettings', 'SilentAim is unavailable')
+		return
+	end
+	local fun = mod.Options['Function hook']
+	local oth = mod.Options['Oth hook']
+	if type(fun) ~= 'table' or type(oth) ~= 'table' then
+		ctx.log:add('patch', 'SilentAimSettings', 'SilentAim hook options are unavailable')
+		return
+	end
+	local main = vape.Categories and vape.Categories.Main and vape.Categories.Main.Settings
+	if type(main) ~= 'table' or type(main.CreateSettingsPane) ~= 'function' then
+		ctx.log:add('patch', 'SilentAimSettings', 'Vape settings pane is unavailable')
+		return
+	end
+	if type(vape.Settings) ~= 'table' then return end
+	local fv = fun.Object and fun.Object.Visible
+	local ov = oth.Object and oth.Object.Visible
+	if fun.Object then fun.Object.Visible = false end
+	if oth.Object then oth.Object.Visible = false end
+	ctx:clean(function()
+		if fun.Object then fun.Object.Visible = fv end
+		if oth.Object then oth.Object.Visible = ov end
+	end)
+	local pane = main:CreateSettingsPane({Name = 'Silent Aim'})
+	local btn = main.Buttons and main.Buttons['Silent Aim']
+	local map = {}
+	for i, name in ipairs({'General', 'Modules', 'Silent Aim', 'GUI', 'Notifications'}) do
+		local item = main.Buttons and main.Buttons[name]
+		if item and item.Object then
+			map[item.Object] = item.Object.LayoutOrder
+			item.Object.LayoutOrder = -60 + (i * 10)
+		end
+	end
+	local lock = false
+	local function mode()
+		if oth.Enabled then return 'Oth hook' end
+		if fun.Enabled then return 'Function hook' end
+		return 'Hookmetamethod'
+	end
+	local hook
+	hook = pane:CreateDropdown({
+		Name = 'Hook',
+		List = {'Hookmetamethod', 'Oth hook', 'Function hook'},
+		Function = function(val)
+			if lock then return end
+			local fe = val == 'Function hook'
+			local oe = val == 'Oth hook'
+			if fun.Enabled == fe and oth.Enabled == oe then return end
+			lock = true
+			local ok, msg = pcall(function()
+				local on = mod.Enabled
+				if on then
+					mod:Toggle()
+					task.wait()
+				end
+				if fun.Enabled ~= fe and type(fun.Toggle) == 'function' then fun:Toggle() end
+				if oth.Enabled ~= oe and type(oth.Toggle) == 'function' then oth:Toggle() end
+				if on then mod:Toggle() end
+			end)
+			lock = false
+			if not ok then ctx.log:add('patch', 'SilentAimSettings', msg) end
+		end
+	})
+	local now = mode()
+	if hook.Value ~= now then hook:SetValue(now) end
+	ctx:clean(function()
+		for obj, val in pairs(map) do
+			if obj.Parent then obj.LayoutOrder = val end
+		end
+		if main.Buttons and main.Buttons['Silent Aim'] == btn then main.Buttons['Silent Aim'] = nil end
+		if vape.Settings['Silent Aim'] == pane then vape.Settings['Silent Aim'] = nil end
+		if btn and type(btn.Destroy) == 'function' then pcall(btn.Destroy, btn) end
+		if pane and pane.Object then pcall(pane.Object.Destroy, pane.Object) end
+	end)
+end
+]=],
+		['src/patches/manifest.lua'] = [=[return {
 	init = 'teleport.lua',
 	categories = {'combat', 'render'}
 }
-]],
-		['src/patches/render/crosshair.lua'] = [[return function(ctx)
+]=],
+		['src/patches/render/crosshair.lua'] = [=[return function(ctx)
 	local vape = ctx.vape
 	if type(vape) ~= 'table' or type(vape.CreateOverlay) ~= 'function' then
 		error('Crosshair requires the new Vape GUI overlay API', 0)
@@ -3914,15 +3996,15 @@ end
 	end)
 
 end
-]],
-		['src/patches/render/manifest.lua'] = [[return {
+]=],
+		['src/patches/render/manifest.lua'] = [=[return {
 	files = {
 		'crosshair.lua',
 		'modulemanager.lua'
 	}
 }
-]],
-		['src/patches/render/modulemanager.lua'] = [[return function(ctx)
+]=],
+		['src/patches/render/modulemanager.lua'] = [=[return function(ctx)
 	local vape = ctx.vape
 	if ctx.target.gui ~= 'new' or type(vape) ~= 'table'
 		or type(vape.CreateCategory) ~= 'function'
@@ -5537,7 +5619,7 @@ end
 		end
 	end)
 end
-]],
+]=],
 		['src/patches/teleport.lua'] = [=[return function(ctx)
 	local env = (getgenv and getgenv()) or _G
 	local raw = type(env.VapeTweakerConfig) == 'table' and env.VapeTweakerConfig or {}
