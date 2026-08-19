@@ -1,63 +1,52 @@
-
 return function(ctx)
 	local patch = ctx:patch('SilentAim', 'SilentAimfix', 'combat')
 	if not patch then return end
-
 	local mod = patch.mod
 	local players = game:GetService('Players')
-	local localPlayer = players.LocalPlayer
-	local guard
-	local geometryGuard
-	local weaponScripts
+	local lp = players.LocalPlayer
+	local fix
 
-	local function readUpvalues(fn)
-		local getter = debug and debug.getupvalues or getupvalues
-		if type(getter) == 'function' then
-			local ok, values = pcall(getter, fn)
-			if ok and type(values) == 'table' then return values end
+	local function ups(fn)
+		local get = debug and debug.getupvalues or getupvalues
+		if type(get) == 'function' then
+			local ok, val = pcall(get, fn)
+			if ok and type(val) == 'table' then return val end
 		end
-
-		local get = debug and debug.getupvalue or getupvalue
+		get = debug and debug.getupvalue or getupvalue
 		if type(get) ~= 'function' then return {} end
-
-		local values = {}
-		for index = 1, 48 do
-			local result = table.pack(pcall(get, fn, index))
-			if not result[1] or result[2] == nil then break end
-			values[#values + 1] = result.n >= 3 and result[3] or result[2]
+		local out = {}
+		for i = 1, 48 do
+			local val = table.pack(pcall(get, fn, i))
+			if not val[1] or val[2] == nil then break end
+			out[#out + 1] = val.n >= 3 and val[3] or val[2]
 		end
-		return values
+		return out
 	end
 
-	local ok, moduleFunction = ctx.vapeapi:getprop(mod, 'Function')
-	if not ok or type(moduleFunction) ~= 'function' then
+	local ok, fn = ctx.vapeapi:getprop(mod, 'Function')
+	if not ok or type(fn) ~= 'function' then
 		ctx.log:add('patch', 'SilentAimfix', 'SilentAim Function is unavailable')
 		return
 	end
 
 	local hooks
-	local function valid(v)
-		return type(v) == 'function' or type(v) == 'table' and type(v.Function) == 'function'
+	local function valid(val)
+		return type(val) == 'function' or type(val) == 'table' and type(val.Function) == 'function'
 	end
-	for _, value in pairs(readUpvalues(moduleFunction)) do
-		if type(value) == 'table'
-			and valid(value.Ray)
-			and valid(value.Raycast)
-			and valid(value.ScreenPointToRay) then
-			hooks = value
+	for _, val in pairs(ups(fn)) do
+		if type(val) == 'table' and valid(val.Ray) and valid(val.Raycast) and valid(val.ScreenPointToRay) then
+			hooks = val
 			break
 		end
 	end
-
 	if not hooks then
 		ctx.log:add('patch', 'SilentAimfix', 'SilentAim hook table was not found')
 		return
 	end
 
 	local ray = hooks.Ray
-	local originalRay = type(ray) == 'table' and ray.Function or ray
-
-	local exactCamera = {
+	local old = type(ray) == 'table' and ray.Function or ray
+	local exact = {
 		basecamera = true,
 		camerainput = true,
 		cameramodule = true,
@@ -81,8 +70,7 @@ return function(ctx)
 		vrcamera = true,
 		zoomcontroller = true
 	}
-
-	local cameraPatterns = {
+	local cams = {
 		'camera',
 		'clicktomove',
 		'controlmodule',
@@ -96,8 +84,7 @@ return function(ctx)
 		'transparencycontroller',
 		'zoomcontroller'
 	}
-
-	local weaponPatterns = {
+	local guns = {
 		'blaster',
 		'bow',
 		'bullet',
@@ -114,163 +101,111 @@ return function(ctx)
 		'weapon'
 	}
 
-	local function lower(value)
-		return tostring(value or ''):lower()
+	local function lower(val)
+		return tostring(val or ''):lower()
 	end
 
-	local function containsAny(text, patterns)
-		text = lower(text)
-		for _, pattern in ipairs(patterns) do
-			if text:find(pattern, 1, true) then return true end
+	local function has(txt, list)
+		txt = lower(txt)
+		for _, val in ipairs(list) do
+			if txt:find(val, 1, true) then return true end
 		end
 		return false
 	end
 
-	local function fullName(instance)
-		if typeof(instance) ~= 'Instance' then return '' end
-		local got, value = pcall(instance.GetFullName, instance)
-		return got and lower(value) or lower(instance.Name)
+	local function full(obj)
+		if typeof(obj) ~= 'Instance' then return '' end
+		local ok2, val = pcall(obj.GetFullName, obj)
+		return ok2 and lower(val) or lower(obj.Name)
 	end
 
-	local function manuallyAllowed(instance)
-		local list = weaponScripts and weaponScripts.ListEnabled
-		if type(list) ~= 'table' then return false end
-
-		local name = typeof(instance) == 'Instance' and lower(instance.Name) or ''
-		local path = fullName(instance)
-		for _, item in ipairs(list) do
-			item = lower(item)
-			if item ~= '' and (item == name or item == path or path:find(item, 1, true)) then
-				return true
-			end
-		end
-		return false
-	end
-
-	local function hasAncestor(instance, wanted)
-		if typeof(instance) ~= 'Instance' then return false end
-		local current = instance.Parent
+	local function parent(obj, list)
+		if typeof(obj) ~= 'Instance' then return false end
+		local cur = obj.Parent
 		for _ = 1, 16 do
-			if not current or current == game then break end
-			local name = lower(current.Name)
-			if wanted[name] then return true end
-			current = current.Parent
+			if not cur or cur == game then break end
+			if list[lower(cur.Name)] then return true end
+			cur = cur.Parent
 		end
 		return false
 	end
 
-	local function cameraCaller(instance)
-		if typeof(instance) ~= 'Instance' then return false end
-		local name = lower(instance.Name)
-		local path = fullName(instance)
-		if exactCamera[name] then return true end
-		if containsAny(name, cameraPatterns) or containsAny(path, cameraPatterns) then return true end
-		return hasAncestor(instance, {
-			cameramodule = true,
-			controlmodule = true
-		})
+	local function camera(obj)
+		if typeof(obj) ~= 'Instance' then return false end
+		local name = lower(obj.Name)
+		local path = full(obj)
+		if exact[name] then return true end
+		if has(name, cams) or has(path, cams) then return true end
+		return parent(obj, {cameramodule = true, controlmodule = true})
 	end
 
-	local function weaponCaller(instance)
-		if typeof(instance) ~= 'Instance' then return false end
-
-		local current = instance.Parent
+	local function weapon(obj)
+		if typeof(obj) ~= 'Instance' then return false end
+		local cur = obj.Parent
 		for _ = 1, 16 do
-			if not current or current == game then break end
-			if current:IsA('Tool') then return true end
-			current = current.Parent
+			if not cur or cur == game then break end
+			if cur:IsA('Tool') then return true end
+			cur = cur.Parent
 		end
-
-		local backpack = localPlayer and localPlayer:FindFirstChildOfClass('Backpack')
-		if backpack and instance:IsDescendantOf(backpack) then return true end
-
-		local name = lower(instance.Name)
-		local path = fullName(instance)
-		return containsAny(name, weaponPatterns) or containsAny(path, weaponPatterns)
+		local bag = lp and lp:FindFirstChildOfClass('Backpack')
+		if bag and obj:IsDescendantOf(bag) then return true end
+		return has(obj.Name, guns) or has(full(obj), guns)
 	end
 
-	local function near(first, second, radius)
-		return (first - second).Magnitude <= radius
+	local function near(a, b, r)
+		return (a - b).Magnitude <= r
 	end
 
-	local function cameraGeometry(origin, direction)
-		if not geometryGuard or not geometryGuard.Enabled then return false end
-		if typeof(origin) ~= 'Vector3' or typeof(direction) ~= 'Vector3' then return false end
-
-		local length = direction.Magnitude
-		if length <= 0.001 then return true end
-
-		local camera = workspace.CurrentCamera
-		if not camera then return false end
-
-		local cameraPosition = camera.CFrame.Position
-		local focusPosition = camera.Focus.Position
-		local endpoint = origin + direction
-
-		if length <= 256 then
-			if near(origin, focusPosition, 8) and near(endpoint, cameraPosition, 10) then return true end
-			if near(origin, cameraPosition, 8) and near(endpoint, focusPosition, 10) then return true end
-
-			local character = localPlayer and localPlayer.Character
-			local root = character and character:FindFirstChild('HumanoidRootPart')
-			if root and near(origin, root.Position, 10) and near(endpoint, cameraPosition, 10) then
-				return true
-			end
+	local function geometry(origin, dir)
+		if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' then return false end
+		local len = dir.Magnitude
+		if len <= 0.001 then return true end
+		local cam = workspace.CurrentCamera
+		if not cam then return false end
+		local pos = cam.CFrame.Position
+		local focus = cam.Focus.Position
+		local last = origin + dir
+		if len <= 256 then
+			if near(origin, focus, 8) and near(last, pos, 10) then return true end
+			if near(origin, pos, 8) and near(last, focus, 10) then return true end
+			local char = lp and lp.Character
+			local root = char and char:FindFirstChild('HumanoidRootPart')
+			if root and near(origin, root.Position, 10) and near(last, pos, 10) then return true end
 		end
-
-		if length <= 6 and (near(origin, cameraPosition, 6) or near(origin, focusPosition, 6)) then
-			return true
-		end
-
-		return false
+		return len <= 6 and (near(origin, pos, 6) or near(origin, focus, 6))
 	end
 
-	local function callingScript()
+	local function caller()
 		if type(getcallingscript) ~= 'function' then return nil end
-		local got, value = pcall(getcallingscript)
-		return got and value or nil
+		local ok2, val = pcall(getcallingscript)
+		return ok2 and val or nil
 	end
 
-	local function shouldBypass(origin, direction)
-		local calling = callingScript()
-		if manuallyAllowed(calling) then return false end
-		if cameraCaller(calling) then return true end
-		if weaponCaller(calling) then return false end
-		return cameraGeometry(origin, direction)
+	local function bypass(origin, dir)
+		local obj = caller()
+		if camera(obj) then return true end
+		if weapon(obj) then return false end
+		return geometry(origin, dir)
 	end
 
-	weaponScripts = patch:option('textlist', {
-		name = 'Ray Weapon Scripts',
-		darker = true,
-		tooltip = 'Script names or full-name fragments that should always remain eligible for the Ray.new method.'
-	})
-
-	geometryGuard = patch:option('toggle', {
-		name = 'Ray Geometry Guard',
+	fix = patch:option('toggle', {
+		name = 'RayCamFix',
 		default = true,
 		darker = true,
-		tooltip = 'Also recognizes camera obstruction rays from their origin and endpoint when the calling script is unavailable.'
+		tooltip = 'Prevents Ray.new SilentAim from redirecting camera and control rays.'
 	})
+	if fix and fix.Object then fix.Object.Visible = false end
+	ctx.raycamfix = fix
 
-	guard = patch:option('toggle', {
-		name = 'Ray Camera Guard',
-		default = true,
-		darker = true,
-		tooltip = 'Prevents the Ray.new method from redirecting camera, occlusion, shift-lock, and control rays.'
-	})
-
-	local guardedRay = function(args)
-		if guard and guard.Enabled and shouldBypass(args[1], args[2]) then return end
-		return originalRay(args)
+	local guard = function(args)
+		if fix and fix.Enabled and bypass(args[1], args[2]) then return end
+		return old(args)
 	end
-
 	local res
 	if type(ray) == 'table' then
-		res = patch:set('Function', guardedRay, ray)
+		res = patch:set('Function', guard, ray)
 	else
-		res = patch:set('Ray', guardedRay, hooks)
+		res = patch:set('Ray', guard, hooks)
 	end
-	if not res then
-		error('SilentAim Ray transform could not be patched', 0)
-	end
+	if not res then error('SilentAim Ray transform could not be patched', 0) end
 end

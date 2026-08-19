@@ -95,6 +95,7 @@ end
 
 local ok, msg = xpcall(function()
 	ctx.vape = ctx.vapeapi:attach()
+	ctx.vapeapi:ensurecats()
 	ctx.vapeapi:reindex()
 	ctx:resolvetarget()
 	init.profile(ctx)

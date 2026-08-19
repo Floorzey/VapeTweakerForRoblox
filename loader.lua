@@ -2,8 +2,8 @@ local env = (getgenv and getgenv()) or _G
 local rawcfg = type(env.VapeTweakerConfig) == 'table' and env.VapeTweakerConfig or {}
 local compile = loadstring
 local http = game:GetService('HttpService')
-local ver = '1.2.3'
-local build = '1.2.3'
+local ver = '1.3.0'
+local build = '1.3.0'
 
 local function pick(low, high, default)
 	local val = rawcfg[low]
@@ -154,51 +154,6 @@ for _, path in ipairs({
 	mkdir(path)
 end
 
-local pack
-local packfrom
-local packpath = join(cfg.root, 'cache/bundle.lua')
-
-local function unpack(raw)
-	if type(raw) ~= 'string' or raw == '' or type(compile) ~= 'function' then return nil end
-	local fn = compile(raw, '@vapetweaker/'..build..'/bundle.lua')
-	if type(fn) ~= 'function' then return nil end
-	local ok, data = pcall(fn)
-	if not ok or type(data) ~= 'table' or data.build ~= build or type(data.files) ~= 'table' then return nil end
-	local count = 0
-	for path, body in pairs(data.files) do
-		if type(path) ~= 'string' or norm(path) ~= path or type(body) ~= 'string' or body == '' then return nil end
-		count += 1
-	end
-	if count == 0 then return nil end
-	return data
-end
-
-local function loadpack()
-	if cfg.localdev and not cfg.localfallback then return end
-	local url = requestbase..'/bundle.lua'
-	if moving then url = fresh(url) end
-	local ok, raw = pcall(game.HttpGet, game, url, true)
-	if ok then
-		local data = unpack(raw)
-		if data then
-			pack = data
-			packfrom = 'bundle'
-			if cfg.cache then write(packpath, raw) end
-			return
-		end
-	end
-	if cfg.cache then
-		local cached = read(packpath)
-		local data = unpack(cached)
-		if data then
-			pack = data
-			packfrom = 'bundle-cache'
-		end
-	end
-end
-
-loadpack()
-
 local meta = {}
 local metapath = join(cfg.root, 'cache/meta.json')
 local backpath = variant(metapath, 'bak')
@@ -270,7 +225,7 @@ local ld = {
 	base = cfg.base,
 	misses = {},
 	pending = {},
-	stats = {remote = 0, cache = 0, bundle = 0, localdev = 0, missing = 0, requested = 0},
+	stats = {remote = 0, cache = 0, localdev = 0, missing = 0, requested = 0},
 	meta = meta,
 	cachevalid = cacheok,
 	errors = loaderrors,
@@ -278,10 +233,7 @@ local ld = {
 	moving = moving,
 	metaraw = metaraw,
 	requestbase = requestbase,
-	pack = pack and pack.files or nil,
-	packfrom = packfrom,
-	games = pack and pack.games,
-	mode = packfrom
+	mode = nil
 }
 
 function ld:active()
@@ -395,10 +347,6 @@ local function source(path, optional)
 	ld.stats.requested = ld.stats.requested + 1
 	local data, from = localfile(path)
 	if data then return data, from end
-	if ld.pack and type(ld.pack[path]) == 'string' then
-		ld.stats.bundle += 1
-		return ld.pack[path], ld.packfrom or 'bundle'
-	end
 	if cfg.localdev and not cfg.localfallback then
 		ld.misses[path] = true
 		ld.stats.missing = ld.stats.missing + 1

@@ -8,6 +8,7 @@ return function(ctx)
 	end
 	local fun = mod.Options['Function hook']
 	local oth = mod.Options['Oth hook']
+	local fix = mod.Options.RayCamFix or ctx.raycamfix
 	if type(fun) ~= 'table' or type(oth) ~= 'table' then
 		ctx.log:add('patch', 'SilentAimSettings', 'SilentAim hook options are unavailable')
 		return
@@ -22,6 +23,7 @@ return function(ctx)
 	local ov = oth.Object and oth.Object.Visible
 	if fun.Object then fun.Object.Visible = false end
 	if oth.Object then oth.Object.Visible = false end
+	if fix and fix.Object then fix.Object.Visible = false end
 	ctx:clean(function()
 		if fun.Object then fun.Object.Visible = fv end
 		if oth.Object then oth.Object.Visible = ov end
@@ -42,8 +44,7 @@ return function(ctx)
 		if fun.Enabled then return 'Function hook' end
 		return 'Hookmetamethod'
 	end
-	local hook
-	hook = pane:CreateDropdown({
+	local hook = pane:CreateDropdown({
 		Name = 'Hook',
 		List = {'Hookmetamethod', 'Oth hook', 'Function hook'},
 		Function = function(val)
@@ -68,6 +69,33 @@ return function(ctx)
 	})
 	local now = mode()
 	if hook.Value ~= now then hook:SetValue(now) end
+	if type(fix) == 'table' and type(fix.Toggle) == 'function' then
+		local ray
+		local sync = false
+		local old = fix.Toggle
+		local wrap
+		wrap = function(obj, ...)
+			local out = table.pack(old(obj, ...))
+			if ray and ray.Enabled ~= fix.Enabled then
+				sync = true
+				ray:Toggle()
+				sync = false
+			end
+			return table.unpack(out, 1, out.n)
+		end
+		fix.Toggle = wrap
+		ray = pane:CreateToggle({
+			Name = 'RayCamFix',
+			Default = fix.Enabled == true,
+			Function = function(val)
+				if sync then return end
+				if fix.Enabled ~= val then fix:Toggle() end
+			end
+		})
+		ctx:clean(function()
+			if fix.Toggle == wrap then fix.Toggle = old end
+		end)
+	end
 	ctx:clean(function()
 		for obj, val in pairs(map) do
 			if obj.Parent then obj.LayoutOrder = val end
