@@ -1,12 +1,13 @@
 return function(ctx)
 	local mod
 	local meth
-	local delay
+	local ping
 	local old
 	local net
 	local hook
 	local busy = false
 	local seq = 0
+	local rng = Random.new()
 
 	local function get()
 		if type(settings) ~= 'function' then return nil end
@@ -27,6 +28,32 @@ return function(ctx)
 			and type(raknet.add_send_hook) == 'function'
 			and type(raknet.remove_send_hook) == 'function'
 			and type(raknet.send) == 'function'
+	end
+
+	local function check()
+		if not ready() then return false end
+		local fn = function() end
+		local ok = pcall(raknet.add_send_hook, fn)
+		if ok then pcall(raknet.remove_send_hook, fn) end
+		return ok
+	end
+
+	local function warn()
+		local vape = ctx.vapeapi and ctx.vapeapi.object
+		if type(vape) == 'table' and type(vape.CreateNotification) == 'function' then
+			pcall(vape.CreateNotification, vape, 'FakeLag', 'This feature requires raknet! (risky feature, please do not use on mains.)', 10, 'warning')
+		end
+	end
+
+	local function pick()
+		if ping and type(ping.GetRandomValue) == 'function' then
+			local ok, val = pcall(ping.GetRandomValue, ping)
+			if ok and tonumber(val) then return math.max(tonumber(val), 0) end
+		end
+		local low = tonumber(ping and ping.ValueMin) or 200
+		local high = tonumber(ping and ping.ValueMax) or 300
+		if high < low then low, high = high, low end
+		return rng:NextNumber(low, high)
 	end
 
 	local function read(pkt)
@@ -62,7 +89,16 @@ return function(ctx)
 		if not net then return false end
 		local ok, val = pcall(function() return net.IncomingReplicationLag end)
 		old = ok and val or 0
-		return set((delay and delay.Value or 250) / 1000)
+		seq += 1
+		local cur = seq
+		if not set(pick() / 1000) then return false end
+		task.spawn(function()
+			while mod.Enabled and meth.Value == 'Normal' and cur == seq do
+				set(pick() / 1000)
+				task.wait(0.1)
+			end
+		end)
+		return true
 	end
 
 	local function rakhook()
@@ -75,7 +111,8 @@ return function(ctx)
 			if not data then return end
 			local ok = pcall(function() pkt:Block() end)
 			if not ok then return end
-			task.delay(math.max((delay and delay.Value or 250) / 1000, 0), function()
+			local wait = pick() / 1000
+			task.delay(math.max(wait, 0), function()
 				if not mod.Enabled or meth.Value ~= 'Raknet' or cur ~= seq or not ready() then return end
 				busy = true
 				pcall(raknet.send, data[1], data[2], data[3], data[4])
@@ -93,7 +130,7 @@ return function(ctx)
 	end
 
 	local function fail()
-		ctx.vapeapi:notify('FakeLag', 'This feature requires raknet! (risky feature, please do not use on mains.)', 10, 'warning')
+		warn()
 		task.defer(function()
 			if mod.Enabled then mod:Toggle() end
 		end)
@@ -101,12 +138,16 @@ return function(ctx)
 
 	mod = ctx:module('world', {
 		name = 'FakeLag',
-		tooltip = 'Simulates network delay using local replication or Raknet packets.',
+		tooltip = 'Simulates fluctuating network delay using local replication or Raknet packets.',
 		extratext = function()
 			return meth and meth.Value or 'Normal'
 		end,
 		func = function(on)
 			if on then
+				if meth.Value == 'Raknet' and not check() then
+					fail()
+					return
+				end
 				if not start() then fail() end
 			else
 				stop()
@@ -118,22 +159,24 @@ return function(ctx)
 		Name = 'Method',
 		List = {'Normal', 'Raknet'},
 		Default = 'Normal',
-		Function = function()
+		Function = function(val)
+			if val == 'Raknet' and not check() then
+				warn()
+				if mod.Enabled then task.defer(function() if mod.Enabled then mod:Toggle() end end) end
+				return
+			end
 			if not mod.Enabled then return end
 			stop()
 			if not start() then fail() end
 		end
 	})
 
-	delay = mod:CreateSlider({
-		Name = 'Delay',
+	ping = mod:CreateTwoSlider({
+		Name = 'Ping',
 		Min = 0,
 		Max = 3000,
-		Default = 250,
-		Suffix = 'ms',
-		Function = function(val)
-			if mod.Enabled and meth.Value == 'Normal' then set(val / 1000) end
-		end
+		DefaultMin = 200,
+		DefaultMax = 300
 	})
 
 	ctx:clean(stop)
