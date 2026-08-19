@@ -36,11 +36,14 @@ return function(ctx)
 	end
 
 	local hooks
+	local function valid(v)
+		return type(v) == 'function' or type(v) == 'table' and type(v.Function) == 'function'
+	end
 	for _, value in pairs(readUpvalues(moduleFunction)) do
 		if type(value) == 'table'
-			and type(value.Ray) == 'function'
-			and type(value.Raycast) == 'function'
-			and type(value.ScreenPointToRay) == 'function' then
+			and valid(value.Ray)
+			and valid(value.Raycast)
+			and valid(value.ScreenPointToRay) then
 			hooks = value
 			break
 		end
@@ -51,7 +54,8 @@ return function(ctx)
 		return
 	end
 
-	local originalRay = hooks.Ray
+	local ray = hooks.Ray
+	local originalRay = type(ray) == 'table' and ray.Function or ray
 
 	local exactCamera = {
 		basecamera = true,
@@ -260,7 +264,13 @@ return function(ctx)
 		return originalRay(args)
 	end
 
-	if not patch:set('Ray', guardedRay, hooks) then
+	local res
+	if type(ray) == 'table' then
+		res = patch:set('Function', guardedRay, ray)
+	else
+		res = patch:set('Ray', guardedRay, hooks)
+	end
+	if not res then
 		error('SilentAim Ray transform could not be patched', 0)
 	end
 end

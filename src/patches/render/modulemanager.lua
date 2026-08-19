@@ -15,6 +15,7 @@ return function(ctx)
 	local alive = true
 	local ticket = 0
 	local profile
+	local migrate = false
 	local state = {
 		favorites = {},
 		hidden = {},
@@ -120,7 +121,7 @@ return function(ctx)
 			end
 		end
 		local window = cat and cat.Object
-		local title = window and window:FindFirstChild('Title')
+		local title = window and (window:FindFirstChild('Title') or window:FindFirstChildWhichIsA('TextLabel'))
 		local dots = row and row:FindFirstChild('Dots')
 		dots = dots and dots:FindFirstChild('Dots')
 		local font = title and title.FontFace or row and row.FontFace or Font.fromEnum(Enum.Font.Arial)
@@ -368,8 +369,8 @@ return function(ctx)
 			} or nil
 		}
 		state.editing = false
+		migrate = created or not ctx.store:has(file)
 		syncapi()
-		if created or not ctx.store:has(file) then save(profile) end
 	end
 
 	local function accent(mod)
@@ -469,6 +470,17 @@ return function(ctx)
 
 	local function ishidden(name)
 		return state.hidden[name] == true
+	end
+
+	local function bindkeys(mod)
+		local bind = type(mod) == 'table' and mod.Bind
+		if type(bind) ~= 'table' then return {} end
+		if type(bind.Keys) == 'table' then return bind.Keys end
+		local out = {}
+		for i, key in ipairs(bind) do
+			if type(key) == 'string' then out[i] = key end
+		end
+		return out
 	end
 
 	local function hiddenincategory(category)
@@ -579,6 +591,18 @@ return function(ctx)
 		if headers[name] or name == 'Main' or type(cat) ~= 'table'
 			or cat.Type ~= 'Category' or not isinst(cat.Object) then return end
 		local window = cat.Object
+		local native = cat.Done
+		local pencil
+		for _, obj in ipairs(window:GetChildren()) do
+			if obj:IsA('TextButton') and obj ~= native
+				and obj.Position.X.Scale == 1 and obj.Position.X.Offset == -49
+				and obj.Size.X.Offset == 20 and obj.Size.Y.Offset == 40 then
+				pencil = obj
+				break
+			end
+		end
+		if isinst(native) then native.Visible = false end
+		if isinst(pencil) then pencil.Visible = false end
 		cleanstale(window)
 		local pal = getpalette()
 
@@ -648,6 +672,8 @@ return function(ctx)
 			name = name,
 			cat = cat,
 			window = window,
+			native = native,
+			pencil = pencil,
 			edit = edit,
 			editicon = editicon,
 			done = done,
@@ -656,6 +682,17 @@ return function(ctx)
 			hover = false
 		}
 		headers[name] = data
+
+		if isinst(native) then
+			ctx:clean(native:GetPropertyChangedSignal('Visible'):Connect(function()
+				if alive and native.Visible then native.Visible = false end
+			end))
+		end
+		if isinst(pencil) then
+			ctx:clean(pencil:GetPropertyChangedSignal('Visible'):Connect(function()
+				if alive and pencil.Visible then pencil.Visible = false end
+			end))
+		end
 
 		ctx:clean(edit.MouseEnter:Connect(function()
 			editicon.ImageColor3 = pal.text
@@ -686,8 +723,11 @@ return function(ctx)
 	end
 
 	updateheaders = function()
+		vape.EditGUI = false
 		for name, data in pairs(headers) do
 			local count = hiddenincategory(name)
+			if isinst(data.native) then data.native.Visible = false end
+			if isinst(data.pencil) then data.pencil.Visible = false end
 			data.number.Text = tostring(count)
 			data.done.Visible = state.editing
 			data.edit.Visible = not state.editing and data.hover
@@ -736,6 +776,8 @@ return function(ctx)
 		local dots = row:FindFirstChild('Dots')
 		local bind = row:FindFirstChild('Bind')
 		local children = mod.Children
+		local native = mod.SetVisible
+		local edit = mod.Edit
 		local data = {
 			mod = mod,
 			row = row,
@@ -748,6 +790,8 @@ return function(ctx)
 			dots = dots,
 			bind = bind,
 			children = children,
+			native = native,
+			edit = edit,
 			originalparent = isinst(children) and children.Parent or nil,
 			originalorder = isinst(children) and children.LayoutOrder or 0,
 			normal = normal,
@@ -768,10 +812,21 @@ return function(ctx)
 				ApplyHiddenState = mod.ApplyHiddenState,
 				SetChildrenVisible = mod.SetChildrenVisible,
 				SetFavoriteChildrenVisible = mod.SetFavoriteChildrenVisible,
-				FavoriteRow = mod.FavoriteRow
+				FavoriteRow = mod.FavoriteRow,
+				SetVisible = mod.SetVisible
 			}
 		}
 		decorated[mod] = data
+
+		mod.Visible = true
+		if isinst(edit) then edit.Visible = false end
+		if type(native) == 'function' then
+			mod.SetVisible = function(self, visible, loading)
+				self.Visible = true
+				if alive and not loading then sethidden(self.Name, visible == false) end
+				return true
+			end
+		end
 
 		mod.Favorited = isfavorite(mod.Name)
 		mod.FavoriteStar = star
@@ -868,10 +923,14 @@ return function(ctx)
 		data.hiddenbox.Visible = editing
 		data.row.Text = editing and data.edittext or data.normal
 		if isinst(data.dots) then data.dots.Visible = not editing end
+		if isinst(data.edit) then data.edit.Visible = false end
+		mod.Visible = true
 		local originalopen = isinst(data.children) and data.children.Visible
 			and data.children.Parent == data.originalparent and not data.favoriteopen
 		if isinst(data.bind) then
-			local bound = type(mod.Bind) == 'table' and (#mod.Bind > 0 or mod.Bind.Mobile == true)
+			local keys = bindkeys(mod)
+			local mobile = type(mod.Bind) == 'table' and mod.Bind.Mobile
+			local bound = #keys > 0 or isinst(mobile)
 			data.bind.Visible = not editing and (bound or data.hover or originalopen)
 		end
 		data.star.Visible = not editing and originalopen
@@ -886,8 +945,8 @@ return function(ctx)
 			data.bind.Visible = false
 			return
 		end
-		local bindvalue = data.mod.Bind or {}
-		local hasbind = type(bindvalue) == 'table' and #bindvalue > 0
+		local bindvalue = bindkeys(data.mod)
+		local hasbind = #bindvalue > 0
 		data.bind.Visible = data.hover or hasbind or data.moddata and data.moddata.favoriteopen
 		if hasbind then
 			data.bindtext.Visible = true
@@ -1079,9 +1138,13 @@ return function(ctx)
 			bindcover.Size = UDim2.fromOffset(textwidth(bindcovertext.Text, bindcovertext.TextSize, bindcovertext.FontFace) + 20, 40)
 			bindcover.Visible = true
 			vape.Binding = {
-				Bind = mod.Bind,
 				SetBind = function(_, tab, mouse)
-					mod:SetBind(tab, mouse)
+					local bind = mod.Bind
+					if type(bind) == 'table' and type(bind.SetBind) == 'function' then
+						bind:SetBind(tab, mouse)
+					elseif type(mod.SetBind) == 'function' then
+						mod:SetBind(tab, mouse)
+					end
 					updatebindpreview(data)
 					bindcovertext.Text = #tab <= 0 and 'BIND REMOVED' or 'BOUND TO'
 					bindcover.Size = UDim2.fromOffset(textwidth(bindcovertext.Text, bindcovertext.TextSize, bindcovertext.FontFace) + 20, 40)
@@ -1251,7 +1314,7 @@ return function(ctx)
 		for _, child in ipairs(favchildren:GetChildren()) do
 			if child:IsA('GuiObject') then child:Destroy() end
 		end
-		local icon = fav.Object:FindFirstChild('Icon')
+		local icon = fav.Object:FindFirstChild('Icon') or fav.Object:FindFirstChildWhichIsA('ImageLabel')
 		if icon then
 			icon.Size = UDim2.fromOffset(25, 25)
 			icon.Position = UDim2.fromOffset(12, 8)
@@ -1339,6 +1402,13 @@ return function(ctx)
 	syncapi()
 
 	local function scan()
+		if migrate then
+			for _, mod in pairs(vape.Modules) do
+				if type(mod) == 'table' and type(mod.Name) == 'string' and mod.Visible == false then
+					state.hidden[mod.Name] = true
+				end
+			end
+		end
 		for name, cat in pairs(vape.Categories) do
 			if name ~= 'Main' then addheader(name, cat) end
 		end
@@ -1358,6 +1428,11 @@ return function(ctx)
 		addfavoritesbutton()
 		refreshfavorites()
 		updateheaders()
+		if migrate then
+			migrate = false
+			syncapi()
+			save(profile)
+		end
 	end
 
 	scan()
@@ -1400,8 +1475,9 @@ return function(ctx)
 		alive = false
 		closefavoritechildren()
 		for mod, data in pairs(decorated) do
+			local hidden = ishidden(mod.Name)
 			if isinst(data.row) then
-				data.row.Visible = true
+				data.row.Visible = not hidden
 				data.row.Text = data.normal
 			end
 			for _, obj in ipairs({data.star, data.guard, data.rail, data.hiddenbox}) do
@@ -1411,6 +1487,8 @@ return function(ctx)
 			for name, value in pairs(data.oldfields or {}) do
 				mod[name] = value
 			end
+			mod.Visible = not hidden
+			if type(mod.SetVisible) == 'function' then pcall(mod.SetVisible, mod, not hidden, true) end
 		end
 		for _, data in pairs(rows) do
 			if isinst(data.row) then data.row:Destroy() end

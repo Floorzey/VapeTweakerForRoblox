@@ -477,6 +477,17 @@ return function(ctx)
 	function config:watchmodule(item)
 		watchmethod(item.obj, 'Toggle')
 		watchmethod(item.obj, 'SetBind')
+		if type(item.obj.Bind) == 'table' then
+			local bind = item.obj.Bind
+			watchmethod(bind, 'SetBind')
+			watchmethod(bind, 'CreateMobileButton')
+			watchmethod(bind, 'DestroyMobileButton')
+			if typeof and typeof(bind.Object) == 'Instance' and bind.Object.MouseButton1Click then
+				ctx:clean(bind.Object.MouseButton1Click:Connect(function()
+					task.defer(function() config:schedule() end)
+				end))
+			end
+		end
 		for _, opt in pairs(item.obj.Options or {}) do self:watchoption(opt) end
 		for _, method in pairs({
 			'CreateToggle', 'CreateSlider', 'CreateTwoSlider', 'CreateDropdown', 'CreateMultiDropdown',

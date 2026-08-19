@@ -25,14 +25,13 @@ return function(ctx)
 	end
 
 	local function detectgui(vape, configured)
-		if configured ~= 'unknown' then return configured end
-		if type(vape) ~= 'table' or type(vape.Categories) ~= 'table' then return 'unknown' end
+		if type(vape) ~= 'table' or type(vape.Categories) ~= 'table' then return configured end
 		local cats = vape.Categories
-		if type(vape.Legit) ~= 'table' then return 'wurst' end
+		if cats.Main and type(vape.Legit) == 'table' then return 'new' end
 		if cats.Movement or cats.Ghost or cats.Search then return 'rise' end
 		if cats.TopBar then return 'old' end
-		if cats.Main then return 'new' end
-		if cats.Combat and cats.Blatant and cats.Minigames then return 'liquidbounce' end
+		if type(vape.Legit) ~= 'table' then return 'wurst' end
+		if configured ~= 'unknown' then return configured end
 		return 'unknown'
 	end
 
@@ -183,7 +182,7 @@ return function(ctx)
 			end
 			self:reindex()
 			local mod = self.bycat[cat] and self.bycat[cat][name]
-			if not mod and self.flavor == 'rise' and (cat == 'inventory' or cat == 'minigames') then
+			if not mod and self.flavor == 'rise' and cat == 'inventory' then
 				mod = self.bycat.utility and self.bycat.utility[name]
 			end
 			return mod
@@ -560,9 +559,11 @@ return function(ctx)
 				end
 			end
 		end
-		if type(self.object.RainbowTable) == 'table' then
-			for i = #self.object.RainbowTable, 1, -1 do
-				if self.object.RainbowTable[i] == opt then table.remove(self.object.RainbowTable, i) end
+		for _, tab in ipairs({self.object.RainbowSliders, self.object.RainbowTable}) do
+			if type(tab) == 'table' then
+				for i = #tab, 1, -1 do
+					if tab[i] == opt then table.remove(tab, i) end
+				end
 			end
 		end
 		if type(mod.Options) == 'table' and mod.Options[name] == opt then mod.Options[name] = nil end
@@ -614,16 +615,46 @@ return function(ctx)
 		return name
 	end
 
-	function api:setbind(mod, bind)
-		if type(mod.SetBind) ~= 'function' then return false end
-		if self.flavor == 'wurst' and type(bind) == 'table' then bind = bind[1] or '' end
-		mod:SetBind(bind)
+	function api:setbind(mod, data)
+		local bind = type(mod) == 'table' and mod.Bind
+		if type(bind) == 'table' and type(bind.SetBind) == 'function' then
+			local keys = data
+			if type(data) == 'table' and (data.Keys ~= nil or data.keys ~= nil or data.Hold ~= nil or data.hold ~= nil
+				or data.Mobile ~= nil or data.mobile ~= nil) then
+				keys = data.Keys or data.keys or {}
+				bind.Hold = data.Hold == true or data.hold == true
+				local mobile = data.Mobile or data.mobile
+				if type(bind.DestroyMobileButton) == 'function' then bind:DestroyMobileButton() end
+				if type(mobile) == 'table' and type(bind.CreateMobileButton) == 'function' then
+					local x = tonumber(mobile.X or mobile.x)
+					local y = tonumber(mobile.Y or mobile.y)
+					if x and y then bind:CreateMobileButton(Vector2.new(x, y)) end
+				end
+			end
+			if type(keys) ~= 'table' then
+				if keys == nil or keys == '' then keys = {} else keys = {tostring(keys)} end
+			end
+			bind:SetBind(keys)
+			return true
+		end
+		if type(mod) ~= 'table' or type(mod.SetBind) ~= 'function' then return false end
+		if self.flavor == 'wurst' and type(data) == 'table' then data = data[1] or '' end
+		mod:SetBind(data)
 		return true
 	end
 
 	function api:savebind(mod)
-		local bind = mod.Bind
-		local button = type(bind) == 'table' and bind.Button or typeof and typeof(bind) == 'Instance' and bind
+		local bind = type(mod) == 'table' and mod.Bind
+		if type(bind) == 'table' and type(bind.Keys) == 'table' then
+			local out = {Keys = table.clone(bind.Keys), Hold = bind.Hold == true}
+			local mobile = bind.Mobile
+			if typeof and typeof(mobile) == 'Instance' then
+				local ok, pos = pcall(function() return mobile.Position end)
+				if ok then out.Mobile = {X = pos.X.Offset, Y = pos.Y.Offset} end
+			end
+			return out
+		end
+		local button = type(bind) == 'table' and (bind.Button or bind.Object) or typeof and typeof(bind) == 'Instance' and bind
 		if typeof and typeof(button) == 'Instance' then
 			local ok, pos = pcall(function() return button.Position end)
 			if ok then return {Mobile = true, X = pos.X.Offset, Y = pos.Y.Offset} end

@@ -6,7 +6,6 @@ return {
 		'utility',
 		'world',
 		'inventory',
-		'minigames',
 		'legit'
 	},
 	names = {
@@ -16,7 +15,6 @@ return {
 		utility = 'Utility',
 		world = 'World',
 		inventory = 'Inventory',
-		minigames = 'Minigames',
 		legit = 'Legit'
 	}
 }

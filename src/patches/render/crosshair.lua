@@ -19,7 +19,7 @@ return function(ctx)
 			present = ctx.store:write('assets/crosshair.png', body)
 		end
 	end
-	local asset = vape.Libraries and vape.Libraries.getcustomasset
+	local asset = vape.Libraries and vape.Libraries.getcustomasset or getcustomasset
 	if present and type(asset) == 'function' then
 		local ok, val = pcall(asset, iconpath)
 		if ok and type(val) == 'string' and val ~= '' then icon = val end
