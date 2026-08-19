@@ -93,7 +93,7 @@ return function(ctx)
 	end
 
 	local function fail()
-		ctx.vapeapi:notify('FakeLag', 'Raknet is not supported by this executor.', 5, 'alert')
+		ctx.vapeapi:notify('FakeLag', 'This feature requires raknet! (risky feature, please do not use on mains.)', 10, 'warning')
 		task.defer(function()
 			if mod.Enabled then mod:Toggle() end
 		end)
