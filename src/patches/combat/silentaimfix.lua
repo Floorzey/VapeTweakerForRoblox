@@ -3,8 +3,10 @@ return function(ctx)
 	if not patch then return end
 	local mod = patch.mod
 	local players = game:GetService('Players')
+	local input = game:GetService('UserInputService')
 	local lp = players.LocalPlayer
 	local fix
+	local use
 
 	local function ups(fn)
 		local get = debug and debug.getupvalues or getupvalues
@@ -208,4 +210,211 @@ return function(ctx)
 		res = patch:set('Ray', guard, hooks)
 	end
 	if not res then error('SilentAim Ray transform could not be patched', 0) end
+
+	local get = debug and debug.getupvalue or getupvalue
+	local set = debug and debug.setupvalue or setupvalue
+	if type(get) ~= 'function' or type(set) ~= 'function' then
+		ctx.log:add('patch', 'SilentAimfix', 'SilentAim hitbox integration is unsupported')
+		return
+	end
+
+	local funcs = {}
+	local seen = {}
+	for _, val in pairs(hooks) do
+		local cur = type(val) == 'table' and val.Function or val
+		if type(cur) == 'function' and not seen[cur] and cur ~= guard then
+			seen[cur] = true
+			funcs[#funcs + 1] = cur
+		end
+	end
+	if type(old) == 'function' and not seen[old] then funcs[#funcs + 1] = old end
+
+	local count = {}
+	local slots = {}
+	for _, cur in ipairs(funcs) do
+		local list = {}
+		for i = 1, 48 do
+			local out = table.pack(pcall(get, cur, i))
+			if not out[1] or out[2] == nil then break end
+			local val = out.n >= 3 and out[3] or out[2]
+			list[#list + 1] = {i, val}
+			if type(val) == 'function' then count[val] = (count[val] or 0) + 1 end
+		end
+		slots[cur] = list
+	end
+
+	local target
+	local score = 1
+	for cur, n in pairs(count) do
+		local name = ''
+		if debug and type(debug.info) == 'function' then
+			local ok2, val = pcall(debug.info, cur, 'n')
+			if ok2 then name = tostring(val or '') end
+		end
+		if name == 'getTarget' then
+			target = cur
+			break
+		end
+		if n > score then
+			target = cur
+			score = n
+		end
+	end
+	if not target then
+		ctx.log:add('patch', 'SilentAimfix', 'SilentAim target function was not found')
+		return
+	end
+
+	local env
+	if type(getfenv) == 'function' then
+		local ok2, val = pcall(getfenv, target)
+		if ok2 and type(val) == 'table' then env = val end
+	end
+	local lib = env and env.entitylib
+	if type(lib) ~= 'table' or type(lib.EntityMouse) ~= 'function' or type(lib.EntityPosition) ~= 'function' then
+		ctx.log:add('patch', 'SilentAimfix', 'SilentAim entity library was not found')
+		return
+	end
+
+	local hit = ctx:find('HitBoxes', 'blatant') or ctx:find('HitBoxes')
+	local function data()
+		if type(hit) ~= 'table' or type(hit.Options) ~= 'table' then return end
+		local part = hit.Options.Part
+		local expand = hit.Options['Expand amount']
+		local name = part and part.Value
+		local amount = tonumber(expand and expand.Value)
+		if type(name) ~= 'string' or amount == nil then return end
+		return name, math.max(amount, 0), hit.Enabled == true
+	end
+
+	local function size(part, amount, active)
+		local val = part.Size
+		if not active and amount > 0 then
+			val += Vector3.new(amount, amount, amount)
+		end
+		return val
+	end
+
+	local function point(part, origin, amount, active)
+		local half = size(part, amount, active) / 2
+		local pos = part.CFrame:PointToObjectSpace(origin)
+		pos = Vector3.new(
+			math.clamp(pos.X, -half.X, half.X),
+			math.clamp(pos.Y, -half.Y, half.Y),
+			math.clamp(pos.Z, -half.Z, half.Z)
+		)
+		return part.CFrame:PointToWorldSpace(pos)
+	end
+
+	local function mouse(sett, name, amount, active)
+		if not lib.isAlive then table.clear(sett) return end
+		local cam = workspace.CurrentCamera
+		if not cam then table.clear(sett) return end
+		local mouse = sett.MouseOrigin or (input.TouchEnabled and cam.ViewportSize / 2 or input:GetMouseLocation())
+		local ray2 = cam:ViewportPointToRay(mouse.X, mouse.Y)
+		local origin = ray2.Origin
+		local dir = ray2.Direction.Unit
+		local list = {}
+		for _, ent in lib.List do
+			if not sett.Players and ent.Player then continue end
+			if not sett.NPCs and ent.NPC then continue end
+			if not ent.Targetable then continue end
+			local part = ent[name]
+			if typeof(part) ~= 'Instance' or not part:IsA('BasePart') then continue end
+			local t = math.max((part.Position - origin):Dot(dir), 0)
+			local pos = point(part, origin + (dir * t), amount, active)
+			local scr, vis = cam:WorldToViewportPoint(pos)
+			if not vis then continue end
+			local mag = (mouse - Vector2.new(scr.X, scr.Y)).Magnitude
+			if mag > sett.Range then continue end
+			if lib.isVulnerable(ent) then
+				list[#list + 1] = {Entity = ent, Magnitude = ent.Target and -1 or mag}
+			end
+		end
+		table.sort(list, sett.Sort or function(a, b) return a.Magnitude < b.Magnitude end)
+		for _, val in ipairs(list) do
+			local part = val.Entity[name]
+			if sett.Wallcheck and lib.Wallcheck(sett.Origin, part.Position, sett.Wallcheck) then continue end
+			table.clear(sett)
+			table.clear(list)
+			return val.Entity
+		end
+		table.clear(sett)
+		table.clear(list)
+	end
+
+	local function position(sett, name, amount, active)
+		if not lib.isAlive then table.clear(sett) return end
+		local origin = sett.Origin or lib.character.HumanoidRootPart.Position
+		local list = {}
+		for _, ent in lib.List do
+			if not sett.Players and ent.Player then continue end
+			if not sett.NPCs and ent.NPC then continue end
+			if not ent.Targetable then continue end
+			local part = ent[name]
+			if typeof(part) ~= 'Instance' or not part:IsA('BasePart') then continue end
+			local mag = (point(part, origin, amount, active) - origin).Magnitude
+			if mag > sett.Range then continue end
+			if lib.isVulnerable(ent) then
+				list[#list + 1] = {Entity = ent, Magnitude = ent.Target and -1 or mag}
+			end
+		end
+		table.sort(list, sett.Sort or function(a, b) return a.Magnitude < b.Magnitude end)
+		for _, val in ipairs(list) do
+			local part = val.Entity[name]
+			if sett.Wallcheck and lib.Wallcheck(origin, part.Position, sett.Wallcheck) then continue end
+			table.clear(sett)
+			table.clear(list)
+			return val.Entity
+		end
+		table.clear(sett)
+		table.clear(list)
+	end
+
+	use = patch:option('toggle', {
+		name = 'Use Hitboxes',
+		default = false,
+		tooltip = 'Uses the HitBoxes part and expand amount for SilentAim targeting.'
+	})
+	if not use then return end
+
+	local wrap = function(...)
+		if not use.Enabled then return target(...) end
+		local name, amount, active = data()
+		if not name then return target(...) end
+		local oldm = lib.EntityMouse
+		local oldp = lib.EntityPosition
+		lib.EntityMouse = function(sett) return mouse(sett, name, amount, active) end
+		lib.EntityPosition = function(sett) return position(sett, name, amount, active) end
+		local out = table.pack(pcall(target, ...))
+		lib.EntityMouse = oldm
+		lib.EntityPosition = oldp
+		if not out[1] then error(out[2], 0) end
+		local ent = out[2]
+		if ent and ent[name] then out[3] = ent[name] end
+		return table.unpack(out, 2, out.n)
+	end
+
+	local changed = {}
+	for cur, list in pairs(slots) do
+		for _, item in ipairs(list) do
+			if item[2] == target then
+				local ok2 = pcall(set, cur, item[1], wrap)
+				local out = table.pack(pcall(get, cur, item[1]))
+				local val = out[1] and (out.n >= 3 and out[3] or out[2])
+				if ok2 and val == wrap then changed[#changed + 1] = {cur, item[1]} end
+			end
+		end
+	end
+	if #changed == 0 then
+		ctx.log:add('patch', 'SilentAimfix', 'SilentAim target integration could not be installed')
+		return
+	end
+	ctx:clean(function()
+		for _, item in ipairs(changed) do
+			local out = table.pack(pcall(get, item[1], item[2]))
+			local val = out[1] and (out.n >= 3 and out[3] or out[2])
+			if val == wrap then pcall(set, item[1], item[2], target) end
+		end
+	end)
 end

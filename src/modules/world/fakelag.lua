@@ -174,7 +174,7 @@ return function(ctx)
 	ping = mod:CreateTwoSlider({
 		Name = 'Ping',
 		Min = 0,
-		Max = 3000,
+		Max = 500,
 		DefaultMin = 200,
 		DefaultMax = 300
 	})
