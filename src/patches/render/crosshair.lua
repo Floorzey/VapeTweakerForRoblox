@@ -234,6 +234,7 @@ return function(ctx)
 		end)
 	end
 
+	local cut = type(vape.Connections) == 'table' and #vape.Connections or 0
 	overlay = vape:CreateOverlay({
 		Name = 'Crosshair',
 		Icon = icon,
@@ -244,6 +245,12 @@ return function(ctx)
 			if holder then holder.Visible = on end
 		end
 	})
+	local links = {}
+	if type(vape.Connections) == 'table' then
+		for i = cut + 1, #vape.Connections do
+			links[#links + 1] = vape.Connections[i]
+		end
+	end
 
 	if not present and iconpath and ctx.store.fs.write then
 		task.spawn(function()
@@ -261,6 +268,14 @@ return function(ctx)
 	end
 
 	ctx:clean(function()
+		if type(vape.Connections) == 'table' then
+			for _, con in ipairs(links) do
+				pcall(function() con:Disconnect() end)
+				for i = #vape.Connections, 1, -1 do
+					if vape.Connections[i] == con then table.remove(vape.Connections, i) end
+				end
+			end
+		end
 		if type(vape.Overlays) == 'table' and type(vape.Overlays.Toggles) == 'table' then
 			for i = #vape.Overlays.Toggles, 1, -1 do
 				if vape.Overlays.Toggles[i] == overlay.Button then

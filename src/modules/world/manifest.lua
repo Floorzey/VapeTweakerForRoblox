@@ -1,5 +1,6 @@
 return {
 	files = {
-		'fakelag.lua'
+		'fakelag.lua',
+		'lagswitch.lua'
 	}
 }
