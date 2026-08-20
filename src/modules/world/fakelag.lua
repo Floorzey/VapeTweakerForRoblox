@@ -8,6 +8,14 @@ return function(ctx)
 	local busy = false
 	local seq = 0
 	local rng = Random.new()
+	local q = {}
+	local head = 1
+	local tail = 0
+	local goal = 0
+	local cur = 0
+	local base = 0
+	local last = 0
+	local stats = game:GetService('Stats')
 
 	local function get()
 		if type(settings) ~= 'function' then return nil end
@@ -45,15 +53,25 @@ return function(ctx)
 		end
 	end
 
-	local function pick()
-		if ping and type(ping.GetRandomValue) == 'function' then
-			local ok, val = pcall(ping.GetRandomValue, ping)
-			if ok and tonumber(val) then return math.max(tonumber(val), 0) end
-		end
-		local low = tonumber(ping and ping.ValueMin) or 200
-		local high = tonumber(ping and ping.ValueMax) or 300
+	local function bounds()
+		local low = tonumber(ping and (ping.ValueMin or ping.MinValue or ping.LowValue)) or 200
+		local high = tonumber(ping and (ping.ValueMax or ping.MaxValue or ping.HighValue)) or 300
 		if high < low then low, high = high, low end
+		return math.clamp(low, 0, 500), math.clamp(high, 0, 500)
+	end
+
+	local function pick()
+		local low, high = bounds()
+		if high <= low then return low end
 		return rng:NextNumber(low, high)
+	end
+
+	local function stat()
+		local ok, val = pcall(function()
+			return stats.Network.ServerStatsItem['Data Ping']:GetValue()
+		end)
+		val = ok and tonumber(val) or nil
+		return val and math.max(val, 0) or 0
 	end
 
 	local function read(pkt)
@@ -74,14 +92,52 @@ return function(ctx)
 		return {data, pri, rel, chan}
 	end
 
+	local function send(data)
+		if not data or not ready() then return end
+		busy = true
+		pcall(raknet.send, data[1], data[2], data[3], data[4])
+		busy = false
+	end
+
+	local function flush()
+		for i = head, tail do
+			if q[i] then send(q[i][2]) end
+		end
+		table.clear(q)
+		head = 1
+		tail = 0
+		last = 0
+	end
+
 	local function stop()
 		seq += 1
 		if hook and ready() then pcall(raknet.remove_send_hook, hook) end
 		hook = nil
+		flush()
 		busy = false
 		if old ~= nil then set(old) end
 		old = nil
 		net = nil
+	end
+
+	local function flow(curid, normal)
+		goal = pick()
+		cur = goal
+		local nxt = os.clock() + rng:NextNumber(0.65, 1.25)
+		task.spawn(function()
+			while mod.Enabled and curid == seq and (normal and meth.Value == 'Normal' or not normal and meth.Value == 'Raknet') do
+				local low, high = bounds()
+				local now = os.clock()
+				if now >= nxt then
+					goal = rng:NextNumber(low, high)
+					nxt = now + rng:NextNumber(0.65, 1.25)
+				end
+				goal = math.clamp(goal, low, high)
+				cur = math.clamp(cur + (goal - cur) * 0.18, low, high)
+				if normal then set(cur / 1000) end
+				task.wait(0.05)
+			end
+		end)
 	end
 
 	local function normal()
@@ -90,38 +146,55 @@ return function(ctx)
 		local ok, val = pcall(function() return net.IncomingReplicationLag end)
 		old = ok and val or 0
 		seq += 1
-		local cur = seq
-		if not set(pick() / 1000) then return false end
-		task.spawn(function()
-			while mod.Enabled and meth.Value == 'Normal' and cur == seq do
-				set(pick() / 1000)
-				task.wait(0.1)
-			end
-		end)
-		return true
+		local id = seq
+		flow(id, true)
+		return set(cur / 1000)
 	end
 
 	local function rakhook()
 		if not ready() then return false end
 		seq += 1
-		local cur = seq
+		local id = seq
+		base = stat()
+		flow(id, false)
 		hook = function(pkt)
-			if busy or not mod.Enabled or meth.Value ~= 'Raknet' or cur ~= seq then return end
+			if busy or not mod.Enabled or meth.Value ~= 'Raknet' or id ~= seq then return end
 			local data = read(pkt)
 			if not data then return end
 			local ok = pcall(function() pkt:Block() end)
 			if not ok then return end
-			local wait = pick() / 1000
-			task.delay(math.max(wait, 0), function()
-				if not mod.Enabled or meth.Value ~= 'Raknet' or cur ~= seq or not ready() then return end
-				busy = true
-				pcall(raknet.send, data[1], data[2], data[3], data[4])
-				busy = false
-			end)
+			local extra = math.max(cur - base, 0) / 1000
+			local now = os.clock()
+			local at = math.max(now + extra, last + 0.0001)
+			last = at
+			tail += 1
+			q[tail] = {at, data}
 		end
 		local ok = pcall(raknet.add_send_hook, hook)
-		if not ok then hook = nil end
-		return ok
+		if not ok then
+			hook = nil
+			table.clear(q)
+			head = 1
+			tail = 0
+			return false
+		end
+		task.spawn(function()
+			while mod.Enabled and meth.Value == 'Raknet' and id == seq do
+				local now = os.clock()
+				while head <= tail and q[head] and q[head][1] <= now do
+					send(q[head][2])
+					q[head] = nil
+					head += 1
+				end
+				if head > tail then
+					table.clear(q)
+					head = 1
+					tail = 0
+				end
+				task.wait()
+			end
+		end)
+		return true
 	end
 
 	local function start()

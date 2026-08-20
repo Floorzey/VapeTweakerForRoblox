@@ -9,7 +9,7 @@ return function(ctx)
 	local fun = mod.Options['Function hook']
 	local oth = mod.Options['Oth hook']
 	local fix = mod.Options.RayCamFix or ctx.raycamfix
-	local use = mod.Options['Use Hitboxes']
+	local use = mod.Options['Use Hitboxes'] or ctx.usehitboxes
 	if type(fun) ~= 'table' or type(oth) ~= 'table' then
 		ctx.log:add('patch', 'SilentAimSettings', 'SilentAim hook options are unavailable')
 		return
