@@ -11,16 +11,21 @@ return function(ctx)
 	local q = {}
 	local head = 1
 	local tail = 0
+	local bad = {}
 	local goal = 0
 	local cur = 0
 	local base = 0
+	local extra = 0
 	local last = 0
+	local next = 0
 	local stats = game:GetService('Stats')
 
 	local function get()
 		if type(settings) ~= 'function' then return nil end
 		local ok, val = pcall(settings)
-		if not ok or type(val) ~= 'userdata' and type(val) ~= 'table' then return nil end
+		if not ok then return nil end
+		local kind = type(val)
+		if kind ~= 'userdata' and kind ~= 'table' then return nil end
 		local ok2, out = pcall(function() return val.Network end)
 		return ok2 and out or nil
 	end
@@ -31,19 +36,18 @@ return function(ctx)
 		return pcall(function() net.IncomingReplicationLag = val end)
 	end
 
-	local function ready()
+	local function api()
 		return type(raknet) == 'table'
 			and type(raknet.add_send_hook) == 'function'
 			and type(raknet.remove_send_hook) == 'function'
 			and type(raknet.send) == 'function'
+			and type(raknet.is_enabled) == 'function'
 	end
 
-	local function check()
-		if not ready() then return false end
-		local fn = function() end
-		local ok = pcall(raknet.add_send_hook, fn)
-		if ok then pcall(raknet.remove_send_hook, fn) end
-		return ok
+	local function ready()
+		if not api() then return false end
+		local ok, val = pcall(raknet.is_enabled)
+		return ok and val == true
 	end
 
 	local function warn()
@@ -71,37 +75,88 @@ return function(ctx)
 			return stats.Network.ServerStatsItem['Data Ping']:GetValue()
 		end)
 		val = ok and tonumber(val) or nil
-		return val and math.max(val, 0) or 0
+		return val and math.max(val, 0) or nil
+	end
+
+	local function copy(val)
+		local kind = typeof(val)
+		if type(val) == 'string' then return val end
+		if kind == 'buffer' then
+			if type(buffer) ~= 'table' or type(buffer.len) ~= 'function' or type(buffer.create) ~= 'function' or type(buffer.copy) ~= 'function' then return val end
+			local ok, out = pcall(function()
+				local n = buffer.len(val)
+				local b = buffer.create(n)
+				buffer.copy(b, 0, val, 0, n)
+				return b
+			end)
+			return ok and out or val
+		end
+		if type(val) == 'table' then
+			local out = table.create(#val)
+			for i, v in ipairs(val) do out[i] = v end
+			return out
+		end
 	end
 
 	local function read(pkt)
 		local data
-		for _, key in ipairs({'AsBuffer', 'AsString', 'AsArray'}) do
-			local ok, val = pcall(function() return pkt[key] end)
-			local kind = ok and typeof(val) or nil
-			if ok and (kind == 'buffer' or type(val) == 'string' or type(val) == 'table') then
-				data = val
-				break
-			end
+		local ok, val = pcall(function() return pkt.AsString end)
+		if ok and type(val) == 'string' and #val > 0 then data = val end
+		if data == nil then
+			ok, val = pcall(function() return pkt.AsBuffer end)
+			if ok and typeof(val) == 'buffer' then data = copy(val) end
+		end
+		if data == nil then
+			ok, val = pcall(function() return pkt.AsArray end)
+			if ok and type(val) == 'table' and #val > 0 then data = copy(val) end
 		end
 		if data == nil then return nil end
-		local ok, pri, rel, chan = pcall(function()
-			return pkt.Priority, pkt.Reliability, pkt.OrderingChannel
+		local meta, id, pri, rel, chan, size = pcall(function()
+			return pkt.PacketId, pkt.Priority, pkt.Reliability, pkt.OrderingChannel, pkt.Size
 		end)
-		if not ok then return nil end
-		return {data, pri, rel, chan}
+		if not meta then return nil end
+		if type(pri) ~= 'number' or pri < 0 or pri > 3 then return nil end
+		if type(rel) ~= 'number' or rel < 0 or rel > 7 then return nil end
+		if type(chan) ~= 'number' or chan < 0 or chan > 31 then return nil end
+		return {d = data, i = id, p = pri, r = rel, c = chan, s = size}
 	end
 
-	local function send(data)
-		if not data or not ready() then return end
+	local function send(pkt)
+		if not pkt or not ready() then return false end
 		busy = true
-		pcall(raknet.send, data[1], data[2], data[3], data[4])
+		local ok = pcall(raknet.send, pkt.d, pkt.p, pkt.r, pkt.c)
 		busy = false
+		if not ok and pkt.i ~= nil then bad[pkt.i] = true end
+		return ok
+	end
+
+	local function push(pkt)
+		tail += 1
+		q[tail] = pkt
+	end
+
+	local function pop()
+		if head > tail then return nil end
+		local pkt = q[head]
+		q[head] = nil
+		head += 1
+		if head > tail then
+			table.clear(q)
+			head = 1
+			tail = 0
+			last = 0
+		end
+		return pkt
+	end
+
+	local function count()
+		return tail >= head and tail - head + 1 or 0
 	end
 
 	local function flush()
-		for i = head, tail do
-			if q[i] then send(q[i][2]) end
+		while head <= tail do
+			local pkt = pop()
+			if pkt then send(pkt) end
 		end
 		table.clear(q)
 		head = 1
@@ -109,33 +164,48 @@ return function(ctx)
 		last = 0
 	end
 
+	local function unhook()
+		if hook and api() then pcall(raknet.remove_send_hook, hook) end
+		hook = nil
+	end
+
 	local function stop()
 		seq += 1
-		if hook and ready() then pcall(raknet.remove_send_hook, hook) end
-		hook = nil
+		unhook()
 		flush()
 		busy = false
+		table.clear(bad)
 		if old ~= nil then set(old) end
 		old = nil
 		net = nil
+		last = 0
 	end
 
-	local function flow(curid, normal)
-		goal = pick()
+	local function flow(id, normal)
+		local low, high = bounds()
+		goal = math.clamp(cur > 0 and cur or pick(), low, high)
 		cur = goal
-		local nxt = os.clock() + rng:NextNumber(0.65, 1.25)
+		next = os.clock() + rng:NextNumber(0.8, 1.4)
+		local mark = os.clock()
 		task.spawn(function()
-			while mod.Enabled and curid == seq and (normal and meth.Value == 'Normal' or not normal and meth.Value == 'Raknet') do
-				local low, high = bounds()
+			while mod.Enabled and id == seq and (normal and meth.Value == 'Normal' or not normal and meth.Value == 'Raknet') do
 				local now = os.clock()
-				if now >= nxt then
-					goal = rng:NextNumber(low, high)
-					nxt = now + rng:NextNumber(0.65, 1.25)
+				local dt = math.min(now - mark, 0.1)
+				mark = now
+				low, high = bounds()
+				if now >= next then
+					goal = high > low and rng:NextNumber(low, high) or low
+					next = now + rng:NextNumber(0.8, 1.4)
 				end
 				goal = math.clamp(goal, low, high)
-				cur = math.clamp(cur + (goal - cur) * 0.18, low, high)
-				if normal then set(cur / 1000) end
-				task.wait(0.05)
+				local rate = math.min(dt * 3.5, 1)
+				cur = math.clamp(cur + (goal - cur) * rate, low, high)
+				if normal then
+					set(cur / 1000)
+				else
+					extra = math.max(cur - base, 0)
+				end
+				task.wait(0.03)
 			end
 		end)
 	end
@@ -147,28 +217,35 @@ return function(ctx)
 		old = ok and val or 0
 		seq += 1
 		local id = seq
+		cur = pick()
 		flow(id, true)
 		return set(cur / 1000)
 	end
 
-	local function rakhook()
+	local function rak()
 		if not ready() then return false end
 		seq += 1
 		local id = seq
-		base = stat()
+		base = stat() or 0
+		cur = pick()
+		extra = math.max(cur - base, 0)
 		flow(id, false)
 		hook = function(pkt)
 			if busy or not mod.Enabled or meth.Value ~= 'Raknet' or id ~= seq then return end
 			local data = read(pkt)
-			if not data then return end
+			if not data or bad[data.i] then return end
+			if count() >= 2048 then
+				local first = pop()
+				if first then send(first) end
+			end
 			local ok = pcall(function() pkt:Block() end)
 			if not ok then return end
-			local extra = math.max(cur - base, 0) / 1000
 			local now = os.clock()
-			local at = math.max(now + extra, last + 0.0001)
+			local at = now + extra / 1000
+			if at <= last then at = last + 0.000001 end
 			last = at
-			tail += 1
-			q[tail] = {at, data}
+			data.t = at
+			push(data)
 		end
 		local ok = pcall(raknet.add_send_hook, hook)
 		if not ok then
@@ -181,15 +258,9 @@ return function(ctx)
 		task.spawn(function()
 			while mod.Enabled and meth.Value == 'Raknet' and id == seq do
 				local now = os.clock()
-				while head <= tail and q[head] and q[head][1] <= now do
-					send(q[head][2])
-					q[head] = nil
-					head += 1
-				end
-				if head > tail then
-					table.clear(q)
-					head = 1
-					tail = 0
+				while q[head] and q[head].t <= now do
+					local pkt = pop()
+					if pkt then send(pkt) end
 				end
 				task.wait()
 			end
@@ -198,7 +269,7 @@ return function(ctx)
 	end
 
 	local function start()
-		if meth.Value == 'Raknet' then return rakhook() end
+		if meth.Value == 'Raknet' then return rak() end
 		return normal()
 	end
 
@@ -217,7 +288,7 @@ return function(ctx)
 		end,
 		func = function(on)
 			if on then
-				if meth.Value == 'Raknet' and not check() then
+				if meth.Value == 'Raknet' and not ready() then
 					fail()
 					return
 				end
@@ -233,7 +304,7 @@ return function(ctx)
 		List = {'Normal', 'Raknet'},
 		Default = 'Normal',
 		Function = function(val)
-			if val == 'Raknet' and not check() then
+			if val == 'Raknet' and not ready() then
 				warn()
 				if mod.Enabled then task.defer(function() if mod.Enabled then mod:Toggle() end end) end
 				return
