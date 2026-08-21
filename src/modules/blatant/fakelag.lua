@@ -14,11 +14,8 @@ return function(ctx)
 	local bad = {}
 	local goal = 0
 	local cur = 0
-	local base = 0
-	local extra = 0
 	local last = 0
 	local next = 0
-	local stats = game:GetService('Stats')
 
 	local function get()
 		if type(settings) ~= 'function' then return nil end
@@ -61,21 +58,13 @@ return function(ctx)
 		local low = tonumber(ping and (ping.ValueMin or ping.MinValue or ping.LowValue)) or 200
 		local high = tonumber(ping and (ping.ValueMax or ping.MaxValue or ping.HighValue)) or 300
 		if high < low then low, high = high, low end
-		return math.clamp(low, 0, 500), math.clamp(high, 0, 500)
+		return math.max(low, 0), math.max(high, 0)
 	end
 
 	local function pick()
 		local low, high = bounds()
 		if high <= low then return low end
 		return rng:NextNumber(low, high)
-	end
-
-	local function stat()
-		local ok, val = pcall(function()
-			return stats.Network.ServerStatsItem['Data Ping']:GetValue()
-		end)
-		val = ok and tonumber(val) or nil
-		return val and math.max(val, 0) or nil
 	end
 
 	local function copy(val)
@@ -149,10 +138,6 @@ return function(ctx)
 		return pkt
 	end
 
-	local function count()
-		return tail >= head and tail - head + 1 or 0
-	end
-
 	local function flush()
 		while head <= tail do
 			local pkt = pop()
@@ -202,8 +187,6 @@ return function(ctx)
 				cur = math.clamp(cur + (goal - cur) * rate, low, high)
 				if normal then
 					set(cur / 1000)
-				else
-					extra = math.max(cur - base, 0)
 				end
 				task.wait(0.03)
 			end
@@ -226,22 +209,16 @@ return function(ctx)
 		if not ready() then return false end
 		seq += 1
 		local id = seq
-		base = stat() or 0
 		cur = pick()
-		extra = math.max(cur - base, 0)
 		flow(id, false)
 		hook = function(pkt)
 			if busy or not mod.Enabled or meth.Value ~= 'Raknet' or id ~= seq then return end
 			local data = read(pkt)
 			if not data or bad[data.i] then return end
-			if count() >= 2048 then
-				local first = pop()
-				if first then send(first) end
-			end
 			local ok = pcall(function() pkt:Block() end)
 			if not ok then return end
 			local now = os.clock()
-			local at = now + extra / 1000
+			local at = now + cur / 1000
 			if at <= last then at = last + 0.000001 end
 			last = at
 			data.t = at
