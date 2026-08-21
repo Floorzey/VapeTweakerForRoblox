@@ -1,13 +1,32 @@
 return function(ctx)
 	local mod
+	local meth
 	local mode
 	local time
 	local hook
+	local net
+	local old
 	local busy = false
 	local seq = 0
 	local q = {}
 	local head = 1
 	local tail = 0
+
+	local function get()
+		if type(settings) ~= 'function' then return nil end
+		local ok, val = pcall(settings)
+		if not ok then return nil end
+		local kind = type(val)
+		if kind ~= 'userdata' and kind ~= 'table' then return nil end
+		local ok2, out = pcall(function() return val.Network end)
+		return ok2 and out or nil
+	end
+
+	local function set(val)
+		net = net or get()
+		if not net then return false end
+		return pcall(function() net.IncomingReplicationLag = val end)
+	end
 
 	local function api()
 		return type(raknet) == 'table'
@@ -123,16 +142,12 @@ return function(ctx)
 		unhook()
 		flush()
 		busy = false
+		if old ~= nil then set(old) end
+		old = nil
+		net = nil
 	end
 
-	local function fail()
-		warn()
-		task.defer(function()
-			if mod.Enabled then mod:Toggle() end
-		end)
-	end
-
-	local function start()
+	local function rak()
 		if not ready() then return false end
 		seq += 1
 		local id = seq
@@ -140,13 +155,13 @@ return function(ctx)
 		head = 1
 		tail = 0
 		hook = function(pkt)
-			if busy or not mod.Enabled or id ~= seq then return end
+			if busy or not mod.Enabled or meth.Value ~= 'Raknet' or id ~= seq then return end
 			local data = read(pkt)
 			if not data then return end
 			if count() >= 8192 then
 				busy = true
-				local old = pop()
-				if old then send(old) end
+				local out = pop()
+				if out then send(out) end
 				busy = false
 			end
 			local ok = pcall(function() pkt:Block() end)
@@ -163,28 +178,83 @@ return function(ctx)
 		end
 		if mode.Value == 'OneShot' then
 			task.delay(math.max(tonumber(time.Value) or 1, 0), function()
-				if id ~= seq or not mod.Enabled or mode.Value ~= 'OneShot' then return end
-				unhook()
-				flush()
+				if id ~= seq or not mod.Enabled or meth.Value ~= 'Raknet' or mode.Value ~= 'OneShot' then return end
 				if mod.Enabled then mod:Toggle() end
 			end)
 		end
 		return true
 	end
 
+	local function rep()
+		net = get()
+		if not net then return false end
+		local ok, val = pcall(function() return net.IncomingReplicationLag end)
+		old = ok and val or 0
+		seq += 1
+		local id = seq
+		local dur = math.max(tonumber(time.Value) or 1, 0)
+		local lag = mode.Value == 'Toggle' and 1000000 or dur
+		if not set(lag) then
+			old = nil
+			net = nil
+			return false
+		end
+		if mode.Value == 'OneShot' then
+			task.delay(dur, function()
+				if id ~= seq or not mod.Enabled or meth.Value ~= 'Replication' or mode.Value ~= 'OneShot' then return end
+				if mod.Enabled then mod:Toggle() end
+			end)
+		end
+		return true
+	end
+
+	local function start()
+		if meth.Value == 'Replication' then return rep() end
+		return rak()
+	end
+
+	local function fail()
+		if meth.Value == 'Raknet' then warn() end
+		task.defer(function()
+			if mod.Enabled then mod:Toggle() end
+		end)
+	end
+
 	mod = ctx:module('blatant', {
 		name = 'LagSwitch',
-		tooltip = 'Holds outgoing Raknet traffic and releases it in order.',
+		tooltip = 'Temporarily stalls network traffic using Raknet or local replication lag.',
 		extratext = function()
-			if mode and mode.Value == 'Toggle' then return 'Toggle' end
-			return time and tostring(time.Value)..'s' or '1s'
+			if meth then return meth.Value end
+			return 'Raknet'
 		end,
 		func = function(on)
 			if on then
+				if meth.Value == 'Raknet' and not ready() then
+					fail()
+					return
+				end
 				if not start() then fail() end
 			else
 				stop()
 			end
+		end
+	})
+
+	meth = mod:CreateDropdown({
+		Name = 'Method',
+		List = {'Raknet', 'Replication'},
+		Default = 'Raknet',
+		Function = function(val)
+			if not mod.Enabled then
+				if val == 'Raknet' and not ready() then warn() end
+				return
+			end
+			stop()
+			if val == 'Raknet' and not ready() then
+				fail()
+				return
+			end
+			if not start() then fail() end
 		end
 	})
 
@@ -196,6 +266,10 @@ return function(ctx)
 			if time and time.Object then time.Object.Visible = val == 'OneShot' end
 			if not mod.Enabled then return end
 			stop()
+			if meth.Value == 'Raknet' and not ready() then
+				fail()
+				return
+			end
 			if not start() then fail() end
 		end
 	})
