@@ -47,7 +47,7 @@ return function(ctx)
 		return ok and val == true
 	end
 
-	local function warn()
+	local function notice()
 		local vape = ctx.vapeapi and ctx.vapeapi.object
 		if type(vape) == 'table' and type(vape.CreateNotification) == 'function' then
 			pcall(vape.CreateNotification, vape, 'FakeLag', 'This feature requires raknet! (risky feature, please do not use on mains.)', 10, 'warning')
@@ -251,7 +251,7 @@ return function(ctx)
 	end
 
 	local function fail()
-		warn()
+		notice()
 		task.defer(function()
 			if mod.Enabled then mod:Toggle() end
 		end)
@@ -282,7 +282,7 @@ return function(ctx)
 		Default = 'Normal',
 		Function = function(val)
 			if val == 'Raknet' and not ready() then
-				warn()
+				notice()
 				if mod.Enabled then task.defer(function() if mod.Enabled then mod:Toggle() end end) end
 				return
 			end

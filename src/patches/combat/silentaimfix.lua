@@ -24,7 +24,7 @@ return function(ctx)
 		name = 'RayCamFix',
 		default = true,
 		darker = true,
-		tooltip = 'Prevents Ray.new SilentAim from redirecting camera and control rays.'
+		tooltip = 'Prevents ray hooks from redirecting camera, control, spectate and camera-obstruction casts.'
 	})
 	if fix and fix.Object then fix.Object.Visible = false end
 	ctx.raycamfix = fix
@@ -64,6 +64,29 @@ return function(ctx)
 	local function valid(val)
 		return type(val) == 'function' or type(val) == 'table' and type(val.Function) == 'function'
 	end
+
+	local quietkey = '__vapetweakerquiet'
+	local quietenv = (getgenv and getgenv()) or _G
+	quietenv[quietkey] = type(quietenv[quietkey]) == 'function' and quietenv[quietkey] or function() end
+
+	local function quiet(fn)
+		if type(fn) ~= 'function' then return end
+		if type(getfenv) == 'function' and type(setfenv) == 'function' then
+			local ok2, env = pcall(getfenv, fn)
+			if ok2 and type(env) == 'table' then
+				local proxy = setmetatable({print = quietenv[quietkey], warn = quietenv[quietkey]}, {__index = env, __newindex = env})
+				if pcall(setfenv, fn, proxy) then return end
+			end
+		end
+		local get = debug and debug.getconstants or getconstants
+		local set = debug and debug.setconstant or setconstant
+		if type(get) ~= 'function' or type(set) ~= 'function' then return end
+		local ok2, constants = pcall(get, fn)
+		if not ok2 or type(constants) ~= 'table' then return end
+		for index, value in pairs(constants) do
+			if value == 'print' or value == 'warn' then pcall(set, fn, index, quietkey) end
+		end
+	end
 	for _, val in pairs(ups(fn)) do
 		if type(val) == 'table' and valid(val.Ray) and valid(val.Raycast) and valid(val.ScreenPointToRay) then
 			hooks = val
@@ -75,8 +98,11 @@ return function(ctx)
 		return
 	end
 
+	for _, val in pairs(hooks) do
+		quiet(type(val) == 'table' and val.Function or val)
+	end
+
 	local ray = hooks.Ray
-	local old = type(ray) == 'table' and ray.Function or ray
 	local exact = {
 		basecamera = true,
 		camerainput = true,
@@ -93,6 +119,7 @@ return function(ctx)
 		legacycamera = true,
 		mouselockcontroller = true,
 		orbitalcamera = true,
+		popper = true,
 		poppercam = true,
 		shiftlockcontroller = true,
 		shouldercamera = true,
@@ -103,107 +130,65 @@ return function(ctx)
 	}
 	local cams = {
 		'camera',
+		'camcontroller',
 		'clicktomove',
 		'controlmodule',
 		'controlscript',
+		'firstperson',
 		'invisicam',
 		'mouselock',
 		'occlusion',
-		'poppercam',
+		'popper',
 		'shiftlock',
 		'shouldercam',
+		'spectat',
+		'thirdperson',
 		'transparencycontroller',
+		'viewcontroller',
 		'zoomcontroller'
-	}
-	local guns = {
-		'blaster',
-		'bow',
-		'bullet',
-		'cannon',
-		'firearm',
-		'gun',
-		'launcher',
-		'pistol',
-		'projectile',
-		'rifle',
-		'shoot',
-		'shotgun',
-		'sniper',
-		'weapon'
 	}
 
 	local function lower(val)
 		return tostring(val or ''):lower()
 	end
 
-	local function has(txt, list)
-		txt = lower(txt)
-		for _, val in ipairs(list) do
-			if txt:find(val, 1, true) then return true end
-		end
-		return false
-	end
-
-	local function full(obj)
-		if typeof(obj) ~= 'Instance' then return '' end
-		local ok2, val = pcall(obj.GetFullName, obj)
-		return ok2 and lower(val) or lower(obj.Name)
-	end
-
-	local function parent(obj, list)
-		if typeof(obj) ~= 'Instance' then return false end
-		local cur = obj.Parent
-		for _ = 1, 16 do
-			if not cur or cur == game then break end
-			if list[lower(cur.Name)] then return true end
-			cur = cur.Parent
-		end
-		return false
-	end
-
 	local function camera(obj)
 		if typeof(obj) ~= 'Instance' then return false end
-		local name = lower(obj.Name)
-		local path = full(obj)
-		if exact[name] then return true end
-		if has(name, cams) or has(path, cams) then return true end
-		return parent(obj, {cameramodule = true, controlmodule = true})
-	end
-
-	local function weapon(obj)
-		if typeof(obj) ~= 'Instance' then return false end
-		local cur = obj.Parent
-		for _ = 1, 16 do
+		local cur = obj
+		for _ = 1, 20 do
 			if not cur or cur == game then break end
-			if cur:IsA('Tool') then return true end
+			local name = lower(cur.Name)
+			if exact[name] then return true end
+			for _, token in ipairs(cams) do
+				if name:find(token, 1, true) then return true end
+			end
 			cur = cur.Parent
 		end
-		local bag = lp and lp:FindFirstChildOfClass('Backpack')
-		if bag and obj:IsDescendantOf(bag) then return true end
-		return has(obj.Name, guns) or has(full(obj), guns)
+		return false
 	end
 
 	local function near(a, b, r)
-		return (a - b).Magnitude <= r
+		return typeof(a) == 'Vector3' and typeof(b) == 'Vector3' and (a - b).Magnitude <= r
 	end
 
-	local function geometry(origin, dir)
-		if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' then return false end
-		local len = dir.Magnitude
-		if len <= 0.001 then return true end
-		local cam = workspace.CurrentCamera
-		if not cam then return false end
-		local pos = cam.CFrame.Position
-		local focus = cam.Focus.Position
-		local last = origin + dir
-		if len <= 256 then
-			if near(origin, focus, 8) and near(last, pos, 10) then return true end
-			if near(origin, pos, 8) and near(last, focus, 10) then return true end
-			local char = lp and lp.Character
-			local root = char and char:FindFirstChild('HumanoidRootPart')
-			if root and near(origin, root.Position, 10) and near(last, pos, 10) then return true end
+	local function subjectpos(cam)
+		if not cam then return nil end
+		local sub = cam.CameraSubject
+		if typeof(sub) ~= 'Instance' then return nil end
+		local ok2, pos = pcall(function() return sub.Position end)
+		if ok2 and typeof(pos) == 'Vector3' then return pos end
+		local root
+		ok2, root = pcall(function() return sub.RootPart end)
+		if ok2 and typeof(root) == 'Instance' then
+			ok2, pos = pcall(function() return root.Position end)
+			if ok2 and typeof(pos) == 'Vector3' then return pos end
 		end
-		return len <= 6 and (near(origin, pos, 6) or near(origin, focus, 6))
+		ok2, root = pcall(function() return sub.PrimaryPart end)
+		if ok2 and typeof(root) == 'Instance' then
+			ok2, pos = pcall(function() return root.Position end)
+			if ok2 and typeof(pos) == 'Vector3' then return pos end
+		end
+		return nil
 	end
 
 	local function caller()
@@ -213,10 +198,42 @@ return function(ctx)
 	end
 
 	local function bypass(origin, dir)
-		local obj = caller()
-		if camera(obj) then return true end
-		if weapon(obj) then return false end
-		return geometry(origin, dir)
+		if camera(caller()) then return true end
+		if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' then return false end
+		local len = dir.Magnitude
+		if len <= 0.001 then return true end
+		local cam = workspace.CurrentCamera
+		if not cam then return false end
+		local pos = cam.CFrame.Position
+		local focus = cam.Focus.Position
+		local sub = subjectpos(cam)
+		local char = lp and lp.Character
+		local root
+		if char then
+			local ok2, val = pcall(function() return char.HumanoidRootPart end)
+			if ok2 then root = val end
+		end
+		local rootpos = typeof(root) == 'Instance' and root.Position or nil
+		local last = origin + dir
+		local zoom = math.max((pos - focus).Magnitude, sub and (pos - sub).Magnitude or 0, rootpos and (pos - rootpos).Magnitude or 0)
+		local core = math.clamp(zoom + 8, 10, 96)
+		local short = math.clamp((zoom * 6) + 24, 32, 320)
+		local function anchor(point, radius)
+			if near(point, pos, radius) or near(point, focus, radius) then return true end
+			if sub and near(point, sub, radius) then return true end
+			return rootpos and near(point, rootpos, radius) or false
+		end
+		if len <= 8 and anchor(origin, 8) then return true end
+		if len <= short and anchor(origin, core) and anchor(last, core) then return true end
+		if len <= short then
+			if near(origin, focus, core) and near(last, pos, core) then return true end
+			if near(origin, pos, core) and near(last, focus, core) then return true end
+			if sub and near(origin, sub, core) and near(last, pos, core) then return true end
+			if sub and near(origin, pos, core) and near(last, sub, core) then return true end
+			if rootpos and near(origin, rootpos, core) and near(last, pos, core) then return true end
+			if rootpos and near(origin, pos, core) and near(last, rootpos, core) then return true end
+		end
+		return false
 	end
 
 	local lib = ctx.vape and ctx.vape.Libraries and ctx.vape.Libraries.entity

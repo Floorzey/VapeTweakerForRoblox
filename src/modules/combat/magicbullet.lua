@@ -57,16 +57,21 @@ return function(ctx)
 	}
 	local camtokens = {
 		'camera',
+		'camcontroller',
 		'clicktomove',
 		'controlmodule',
 		'controlscript',
+		'firstperson',
 		'invisicam',
 		'mouselock',
 		'occlusion',
 		'popper',
 		'shiftlock',
 		'shouldercam',
+		'spectat',
+		'thirdperson',
 		'transparencycontroller',
+		'viewcontroller',
 		'zoomcontroller'
 	}
 
@@ -123,7 +128,7 @@ return function(ctx)
 	local function camera(obj)
 		if typeof(obj) ~= 'Instance' then return false end
 		local cur = obj
-		for _ = 1, 16 do
+		for _ = 1, 20 do
 			if not cur or cur == game then break end
 			local name = lower(cur.Name)
 			if camnames[name] then return true end
@@ -139,6 +144,26 @@ return function(ctx)
 		return typeof(a) == 'Vector3' and typeof(b) == 'Vector3' and (a - b).Magnitude <= dist
 	end
 
+	local function subjectpos(cam)
+		if not cam then return nil end
+		local sub = cam.CameraSubject
+		if typeof(sub) ~= 'Instance' then return nil end
+		local ok, pos = pcall(function() return sub.Position end)
+		if ok and typeof(pos) == 'Vector3' then return pos end
+		local root
+		ok, root = pcall(function() return sub.RootPart end)
+		if ok and typeof(root) == 'Instance' then
+			ok, pos = pcall(function() return root.Position end)
+			if ok and typeof(pos) == 'Vector3' then return pos end
+		end
+		ok, root = pcall(function() return sub.PrimaryPart end)
+		if ok and typeof(root) == 'Instance' then
+			ok, pos = pcall(function() return root.Position end)
+			if ok and typeof(pos) == 'Vector3' then return pos end
+		end
+		return nil
+	end
+
 	local function rayguard(origin, dir)
 		if not fix or fix.Enabled ~= true then return false end
 		if camera(caller()) then return true end
@@ -149,15 +174,30 @@ return function(ctx)
 		if not cam then return false end
 		local pos = cam.CFrame.Position
 		local focus = cam.Focus.Position
+		local sub = subjectpos(cam)
+		local char = type(lib) == 'table' and lib.character
+		local root = type(char) == 'table' and (char.RootPart or char.HumanoidRootPart)
+		local rootpos = typeof(root) == 'Instance' and root.Position or nil
 		local last = origin + dir
-		if len <= 256 then
-			if near(origin, focus, 8) and near(last, pos, 10) then return true end
-			if near(origin, pos, 8) and near(last, focus, 10) then return true end
-			local char = type(lib) == 'table' and lib.character
-			local root = type(char) == 'table' and (char.RootPart or char.HumanoidRootPart)
-			if typeof(root) == 'Instance' and near(origin, root.Position, 10) and near(last, pos, 10) then return true end
+		local zoom = math.max((pos - focus).Magnitude, sub and (pos - sub).Magnitude or 0, rootpos and (pos - rootpos).Magnitude or 0)
+		local core = math.clamp(zoom + 8, 10, 96)
+		local short = math.clamp((zoom * 6) + 24, 32, 320)
+		local function anchor(point, radius)
+			if near(point, pos, radius) or near(point, focus, radius) then return true end
+			if sub and near(point, sub, radius) then return true end
+			return rootpos and near(point, rootpos, radius) or false
 		end
-		return len <= 6 and (near(origin, pos, 6) or near(origin, focus, 6))
+		if len <= 8 and anchor(origin, 8) then return true end
+		if len <= short and anchor(origin, core) and anchor(last, core) then return true end
+		if len <= short then
+			if near(origin, focus, core) and near(last, pos, core) then return true end
+			if near(origin, pos, core) and near(last, focus, core) then return true end
+			if sub and near(origin, sub, core) and near(last, pos, core) then return true end
+			if sub and near(origin, pos, core) and near(last, sub, core) then return true end
+			if rootpos and near(origin, rootpos, core) and near(last, pos, core) then return true end
+			if rootpos and near(origin, pos, core) and near(last, rootpos, core) then return true end
+		end
+		return false
 	end
 
 	local function skip()
@@ -470,7 +510,7 @@ return function(ctx)
 	fix = make('CreateToggle', {
 		Name = 'RayCamFix',
 		Default = true,
-		Tooltip = 'Skips camera, control and camera-obstruction rays when spoofing cast origins.'
+		Tooltip = 'Skips camera, control, spectate and camera-obstruction casts using caller and camera-subject geometry.'
 	})
 	wallbang = make('CreateToggle', {Name = 'Wallbang'})
 	range = make('CreateSlider', {

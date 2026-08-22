@@ -2,8 +2,8 @@ local env = (getgenv and getgenv()) or _G
 local rawcfg = type(env.VapeTweakerConfig) == 'table' and env.VapeTweakerConfig or {}
 local compile = loadstring
 local http = game:GetService('HttpService')
-local ver = '1.4.4'
-local build = '1.4.4'
+local ver = '1.4.5'
+local build = '1.4.5'
 
 local function pick(low, high, default)
 	local val = rawcfg[low]
