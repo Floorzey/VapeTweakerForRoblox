@@ -8,6 +8,7 @@ return function(ctx)
 	local range
 	local chance
 	local part
+	local fix
 	local lib = ctx.vape and ctx.vape.Libraries and ctx.vape.Libraries.entity
 	local info = ctx.vape and ctx.vape.Libraries and ctx.vape.Libraries.targetinfo
 	local rng = Random.new()
@@ -19,6 +20,95 @@ return function(ctx)
 	local silent
 	local resume = false
 	local active
+	local camnames = {
+		basecamera = true,
+		camerainput = true,
+		cameramodule = true,
+		camerascript = true,
+		camerascriptnew = true,
+		cameratogglestatecontroller = true,
+		camerautils = true,
+		classiccamera = true,
+		clicktomovecontroller = true,
+		controlmodule = true,
+		controlscript = true,
+		invisicam = true,
+		legacycamera = true,
+		mouselockcontroller = true,
+		orbitalcamera = true,
+		popper = true,
+		poppercam = true,
+		shiftlockcontroller = true,
+		shouldercamera = true,
+		transparencycontroller = true,
+		vehiclecamera = true,
+		vrcamera = true,
+		zoomcontroller = true
+	}
+	local camtokens = {
+		'camera',
+		'clicktomove',
+		'controlmodule',
+		'controlscript',
+		'invisicam',
+		'mouselock',
+		'occlusion',
+		'popper',
+		'shiftlock',
+		'shouldercam',
+		'transparencycontroller',
+		'zoomcontroller'
+	}
+
+	local function lower(val)
+		return tostring(val or ''):lower()
+	end
+
+	local function caller()
+		if type(getcallingscript) ~= 'function' then return nil end
+		local ok, val = pcall(getcallingscript)
+		return ok and val or nil
+	end
+
+	local function camera(obj)
+		if typeof(obj) ~= 'Instance' then return false end
+		local cur = obj
+		for _ = 1, 16 do
+			if not cur or cur == game then break end
+			local name = lower(cur.Name)
+			if camnames[name] then return true end
+			for _, token in ipairs(camtokens) do
+				if name:find(token, 1, true) then return true end
+			end
+			cur = cur.Parent
+		end
+		return false
+	end
+
+	local function near(a, b, dist)
+		return typeof(a) == 'Vector3' and typeof(b) == 'Vector3' and (a - b).Magnitude <= dist
+	end
+
+	local function rayguard(origin, dir)
+		if not fix or fix.Enabled ~= true then return false end
+		if camera(caller()) then return true end
+		if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' then return false end
+		local len = dir.Magnitude
+		if len <= 0.001 then return true end
+		local cam = workspace.CurrentCamera
+		if not cam then return false end
+		local pos = cam.CFrame.Position
+		local focus = cam.Focus.Position
+		local last = origin + dir
+		if len <= 256 then
+			if near(origin, focus, 8) and near(last, pos, 10) then return true end
+			if near(origin, pos, 8) and near(last, focus, 10) then return true end
+			local char = type(lib) == 'table' and lib.character
+			local root = type(char) == 'table' and (char.RootPart or char.HumanoidRootPart)
+			if typeof(root) == 'Instance' and near(origin, root.Position, 10) and near(last, pos, 10) then return true end
+		end
+		return len <= 6 and (near(origin, pos, 6) or near(origin, focus, 6))
+	end
 
 	local function skip()
 		if lock > 0 then return true end
@@ -26,11 +116,9 @@ return function(ctx)
 			local ok, val = pcall(checkcaller)
 			if ok and val then return true end
 		end
-		if type(getcallingscript) == 'function' then
-			local ok, obj = pcall(getcallingscript)
-			if ok and obj and ignored and type(ignored.ListEnabled) == 'table'
-				and table.find(ignored.ListEnabled, tostring(obj)) then return true end
-		end
+		local obj = caller()
+		if obj and ignored and type(ignored.ListEnabled) == 'table'
+			and table.find(ignored.ListEnabled, tostring(obj)) then return true end
 		return false
 	end
 
@@ -92,7 +180,7 @@ return function(ctx)
 			Hook = workspace.Raycast,
 			Args = function(args)
 				local origin, dir = args[1], args[2]
-				if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' then return end
+				if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or rayguard(origin, dir) then return end
 				local pos = cast(origin, dir)
 				if pos then args[1] = pos return true end
 			end
@@ -101,7 +189,7 @@ return function(ctx)
 			Hook = workspace.FindPartOnRayWithIgnoreList,
 			Args = function(args)
 				local ray = args[1]
-				if typeof(ray) ~= 'Ray' then return end
+				if typeof(ray) ~= 'Ray' or rayguard(ray.Origin, ray.Direction) then return end
 				local pos = cast(ray.Origin, ray.Direction, {args[2]})
 				if pos then args[1] = Ray.new(pos, ray.Direction) return true end
 			end
@@ -109,7 +197,7 @@ return function(ctx)
 		ScreenPointToRay = {
 			Hook = Instance.new('Camera').ScreenPointToRay,
 			Result = function(ray)
-				if typeof(ray) ~= 'Ray' then return end
+				if typeof(ray) ~= 'Ray' or rayguard(ray.Origin, ray.Direction) then return end
 				local pos = cast(ray.Origin, ray.Direction)
 				if pos then return Ray.new(pos, ray.Direction) end
 			end
@@ -120,7 +208,7 @@ return function(ctx)
 			NoSelf = true,
 			Args = function(args)
 				local origin, dir = args[1], args[2]
-				if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' then return end
+				if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or rayguard(origin, dir) then return end
 				local pos = cast(origin, dir)
 				if pos then args[1] = pos return true end
 			end
@@ -302,6 +390,11 @@ return function(ctx)
 		end
 	})
 	ignored = make('CreateTextList', {Name = 'Ignored Scripts', Default = {'CameraModule'}})
+	fix = make('CreateToggle', {
+		Name = 'RayCamFix',
+		Default = true,
+		Tooltip = 'Skips camera, control and camera-obstruction rays when spoofing cast origins.'
+	})
 	range = make('CreateSlider', {
 		Name = 'Range',
 		Min = 1,
