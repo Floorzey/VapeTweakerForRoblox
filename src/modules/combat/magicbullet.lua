@@ -34,6 +34,9 @@ return function(ctx)
 	local fire
 	local fireenv
 	local fireups = {}
+	local installerror
+	local lastnotice
+	local noticetime = 0
 	local fireraw = Ray
 	local firenew = Ray.new
 	local wraycast = workspace.Raycast
@@ -310,29 +313,58 @@ return function(ctx)
 	end
 
 	local function findfire()
-		if type(getgc) ~= 'function' then return end
-		local ok, list = pcall(getgc, false)
-		if not ok or type(list) ~= 'table' then ok, list = pcall(getgc) end
-		if not ok or type(list) ~= 'table' then return end
+		local list = {}
+		local seen = {}
+		local function add(val)
+			if type(val) == 'function' and not seen[val] then
+				seen[val] = true
+				list[#list + 1] = val
+			end
+		end
+		if type(filtergc) == 'function' then
+			for _, name in ipairs({'firebullet', 'FireBullet', 'Firebullet'}) do
+				local ok, out = pcall(filtergc, 'function', {Name = name, IgnoreExecutor = true})
+				if ok then
+					if type(out) == 'function' then add(out)
+					elseif type(out) == 'table' then
+						for _, fn in pairs(out) do add(fn) end
+					end
+				end
+				local good, tabs = pcall(filtergc, 'table', {Keys = {name}})
+				if good and type(tabs) == 'table' then
+					for _, tab in pairs(tabs) do
+						if type(tab) == 'table' then add(rawget(tab, name)) end
+					end
+				end
+			end
+		end
+		if #list == 0 and type(getgc) == 'function' then
+			local ok, out = pcall(getgc, false)
+			if not ok or type(out) ~= 'table' then ok, out = pcall(getgc) end
+			if ok and type(out) == 'table' then
+				for _, val in pairs(out) do
+					if type(val) == 'function' and lower(infofn(val)) == 'firebullet' then add(val) end
+				end
+			end
+		end
+		if #list == 0 then return end
 		local best
 		local env
 		local score = -1
-		for _, val in pairs(list) do
-			if type(val) == 'function' and lower(infofn(val)) == 'firebullet' then
-				local e
-				if type(getfenv) == 'function' then
-					local good, out = pcall(getfenv, val)
-					if good and type(out) == 'table' then e = out end
-				end
-				local n = 0
-				if e then
-					if rawget(e, 'currentspread') ~= nil then n += 3 end
-					if rawget(e, 'recoil') ~= nil then n += 3 end
-					if rawget(e, 'spreadmodifier') ~= nil then n += 2 end
-					if rawget(e, 'gun') ~= nil then n += 1 end
-				end
-				if n > score then best, env, score = val, e, n end
+		for _, val in ipairs(list) do
+			local e
+			if type(getfenv) == 'function' then
+				local ok, out = pcall(getfenv, val)
+				if ok and type(out) == 'table' then e = out end
 			end
+			local n = lower(infofn(val)) == 'firebullet' and 8 or 0
+			if e then
+				if rawget(e, 'currentspread') ~= nil then n += 3 end
+				if rawget(e, 'recoil') ~= nil then n += 3 end
+				if rawget(e, 'spreadmodifier') ~= nil then n += 2 end
+				if rawget(e, 'gun') ~= nil then n += 1 end
+			end
+			if n > score then best, env, score = val, e, n end
 		end
 		if not best then return end
 		local ups = {}
@@ -358,10 +390,17 @@ return function(ctx)
 		return best, env, ups
 	end
 
-	local function firehook(useoth)
+	local function firehook()
 		if oldhook then return false end
 		local fn, env, ups = findfire()
-		if type(fn) ~= 'function' then return false end
+		if type(fn) ~= 'function' then
+			installerror = 'The firebullet function was not found.'
+			return false
+		end
+		if type(hookfunction) ~= 'function' then
+			installerror = 'hookfunction is unavailable on this executor.'
+			return false
+		end
 		fire, fireenv, fireups = fn, env, ups or {}
 		local wsproxy
 		local rayproxy
@@ -456,15 +495,20 @@ return function(ctx)
 			if not out[1] then error(out[2], 0) end
 			return table.unpack(out, 2, out.n)
 		end
-		hooked = fn
-		if useoth and oth and type(oth.hook) == 'function' then
-			local ok = pcall(function() oldhook = oth.hook(fn, wrap) end)
-			if ok and type(oldhook) == 'function' then funoth = true return true end
-			oldhook = nil
+		local callback = wrap
+		if type(newcclosure) == 'function' then
+			local ok, val = pcall(newcclosure, wrap, 'VapeTweakerMagicBulletFirebullet')
+			if ok and type(val) == 'function' then callback = val end
 		end
-		if type(hookfunction) ~= 'function' then hooked = nil return false end
-		local ok = pcall(function() oldhook = hookfunction(fn, wrap) end)
-		if not ok or type(oldhook) ~= 'function' then oldhook = nil hooked = nil return false end
+		hooked = fn
+		local ok, val = pcall(hookfunction, fn, callback)
+		if not ok or type(val) ~= 'function' then
+			installerror = 'firebullet was found, but hookfunction could not attach to it.'
+			oldhook = nil
+			hooked = nil
+			return false
+		end
+		oldhook = val
 		return true
 	end
 
@@ -654,23 +698,66 @@ return function(ctx)
 
 	local function install()
 		clear()
+		installerror = nil
 		local name = method and method.Value or 'Raycast'
 		local kind = hook and hook.Value or 'Hookmetamethod'
 		if name == 'Firebullet' then
-			if not firehook(kind == 'Oth hook') then clear() return false end
+			if not firehook() then
+				local err = installerror or 'Firebullet could not be installed.'
+				clear()
+				installerror = err
+				return false, err
+			end
 			active = name
 			return true
 		end
 		local data = hooks[name]
-		if not data then return false end
+		if not data then
+			installerror = 'The selected cast method is unavailable.'
+			return false, installerror
+		end
 		if data.NoNamecall or kind == 'Function hook' then
-			if not functionhook(name, data, kind == 'Oth hook') then clear() return false end
+			if not functionhook(name, data, kind == 'Oth hook') then
+				clear()
+				installerror = 'The selected function hook could not be installed.'
+				return false, installerror
+			end
 			active = name
 			return true
 		end
-		if not namehook(kind) then clear() return false end
+		if not namehook(kind) then
+			clear()
+			installerror = 'The selected hook mode could not be installed.'
+			return false, installerror
+		end
 		active = name
 		return true
+	end
+
+	local function notifyfailure(msg)
+		msg = tostring(msg or 'Magic Bullet could not be installed.')
+		local now = os.clock()
+		if msg == lastnotice and now - noticetime < 30 then return end
+		lastnotice = msg
+		noticetime = now
+		local vape = ctx.vapeapi and ctx.vapeapi.object
+		if type(vape) == 'table' and type(vape.CreateNotification) == 'function' then
+			pcall(vape.CreateNotification, vape, 'Magic Bullet', msg, 6, 'warning')
+		end
+	end
+
+	local function refreshmethod()
+		if hook and hook.Object then hook.Object.Visible = not method or method.Value ~= 'Firebullet' end
+	end
+
+	local function reinstall()
+		refreshmethod()
+		if not mod or not mod.Enabled then return end
+		local ok, err = install()
+		if not ok then
+			notifyfailure(err)
+			task.defer(function() if mod.Enabled then mod:Toggle() end end)
+		end
 	end
 
 	mod = ctx:module('combat', {
@@ -686,11 +773,9 @@ return function(ctx)
 				silent = ctx:find('SilentAim', 'combat') or ctx:find('SilentAim')
 				resume = type(silent) == 'table' and silent.Enabled == true
 				if resume and type(silent.Toggle) == 'function' then pcall(silent.Toggle, silent) end
-				if not install() then
-					local vape = ctx.vapeapi and ctx.vapeapi.object
-					if type(vape) == 'table' and type(vape.CreateNotification) == 'function' then
-						pcall(vape.CreateNotification, vape, 'Magic Bullet', 'The selected cast hook is unavailable on this executor.', 6, 'warning')
-					end
+				local ok, err = install()
+				if not ok then
+					notifyfailure(err)
 					task.defer(function() if mod.Enabled then mod:Toggle() end end)
 				end
 			else
@@ -721,18 +806,15 @@ return function(ctx)
 		Name = 'Method',
 		List = {'Raycast', 'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Ray', 'Firebullet'},
 		Default = 'Raycast',
-		Function = function()
-			if mod.Enabled and not install() then mod:Toggle() end
-		end
+		Function = reinstall
 	})
 	hook = make('CreateDropdown', {
 		Name = 'Hook',
 		List = {'Hookmetamethod', 'Function hook', 'Oth hook'},
 		Default = 'Hookmetamethod',
-		Function = function()
-			if mod.Enabled and not install() then mod:Toggle() end
-		end
+		Function = reinstall
 	})
+	refreshmethod()
 	ignored = make('CreateTextList', {Name = 'Ignored Scripts', Default = {'CameraModule'}})
 	fix = make('CreateToggle', {
 		Name = 'RayCamFix',
