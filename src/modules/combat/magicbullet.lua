@@ -31,6 +31,15 @@ return function(ctx)
 	local silent
 	local resume = false
 	local active
+	local fire
+	local fireenv
+	local fireups = {}
+	local fireraw = Ray
+	local firenew = Ray.new
+	local wraycast = workspace.Raycast
+	local wfind = workspace.FindPartOnRay
+	local wignore = workspace.FindPartOnRayWithIgnoreList
+	local wwhite = workspace.FindPartOnRayWithWhitelist
 	local camnames = {
 		basecamera = true,
 		camerainput = true,
@@ -274,6 +283,191 @@ return function(ctx)
 		return pos, hit
 	end
 
+	local function infofn(fn)
+		local api = type(debug) == 'table' and debug.getinfo or getinfo
+		if type(api) ~= 'function' then return '' end
+		local ok, val = pcall(api, fn)
+		return ok and type(val) == 'table' and tostring(val.name or '') or ''
+	end
+
+	local function upget(fn, index)
+		if type(debug) == 'table' and type(debug.getupvalue) == 'function' then
+			local ok, a, b = pcall(debug.getupvalue, fn, index)
+			if ok then return b ~= nil and b or a end
+		end
+		if type(getupvalue) == 'function' then
+			local ok, val = pcall(getupvalue, fn, index)
+			if ok then return val end
+		end
+	end
+
+	local function upset(fn, index, val)
+		if type(debug) == 'table' and type(debug.setupvalue) == 'function' then
+			return pcall(debug.setupvalue, fn, index, val)
+		end
+		if type(setupvalue) == 'function' then return pcall(setupvalue, fn, index, val) end
+		return false
+	end
+
+	local function findfire()
+		if type(getgc) ~= 'function' then return end
+		local ok, list = pcall(getgc, false)
+		if not ok or type(list) ~= 'table' then ok, list = pcall(getgc) end
+		if not ok or type(list) ~= 'table' then return end
+		local best
+		local env
+		local score = -1
+		for _, val in pairs(list) do
+			if type(val) == 'function' and lower(infofn(val)) == 'firebullet' then
+				local e
+				if type(getfenv) == 'function' then
+					local good, out = pcall(getfenv, val)
+					if good and type(out) == 'table' then e = out end
+				end
+				local n = 0
+				if e then
+					if rawget(e, 'currentspread') ~= nil then n += 3 end
+					if rawget(e, 'recoil') ~= nil then n += 3 end
+					if rawget(e, 'spreadmodifier') ~= nil then n += 2 end
+					if rawget(e, 'gun') ~= nil then n += 1 end
+				end
+				if n > score then best, env, score = val, e, n end
+			end
+		end
+		if not best then return end
+		local ups = {}
+		local empty = 0
+		for index = 1, 96 do
+			local val = upget(best, index)
+			if val == nil then
+				empty += 1
+				if empty >= 8 then break end
+			else
+				empty = 0
+				local kind
+				if val == firenew then kind = 'new'
+				elseif val == fireraw then kind = 'ray'
+				elseif val == workspace then kind = 'workspace'
+				elseif val == wraycast then kind = 'raycast'
+				elseif val == wfind then kind = 'find'
+				elseif val == wignore then kind = 'ignore'
+				elseif val == wwhite then kind = 'white' end
+				if kind then ups[#ups + 1] = {index, kind, val} end
+			end
+		end
+		return best, env, ups
+	end
+
+	local function firehook(useoth)
+		if oldhook then return false end
+		local fn, env, ups = findfire()
+		if type(fn) ~= 'function' then return false end
+		fire, fireenv, fireups = fn, env, ups or {}
+		local wsproxy
+		local rayproxy
+		local function new(origin, dir)
+			if mod.Enabled and typeof(origin) == 'Vector3' and typeof(dir) == 'Vector3' and not rayguard(origin, dir) then
+				local pos = cast(origin, dir)
+				if pos then active = 'Firebullet' origin = pos end
+			end
+			return firenew(origin, dir)
+		end
+		local function legacy(real)
+			return function(self, ray, ...)
+				if mod.Enabled and typeof(ray) == 'Ray' and not rayguard(ray.Origin, ray.Direction) then
+					local pos, hit = cast(ray.Origin, ray.Direction)
+					if pos then
+						active = 'Firebullet'
+						if wallbang and wallbang.Enabled and hit then return hit, hit.Position, hit:GetClosestPointOnSurface(ray.Origin), hit.Material end
+						ray = firenew(pos, ray.Direction)
+					end
+				end
+				return real(workspace, ray, ...)
+			end
+		end
+		local function raycast(self, origin, dir, params)
+			if mod.Enabled and typeof(origin) == 'Vector3' and typeof(dir) == 'Vector3' and not rayguard(origin, dir) then
+				local pos, hit = cast(origin, dir)
+				if pos then
+					active = 'Firebullet'
+					origin = pos
+					if wallbang and wallbang.Enabled and hit then
+						whitelist.FilterDescendantsInstances = {hit}
+						pcall(function() whitelist.CollisionGroup = hit.CollisionGroup end)
+						params = whitelist
+					end
+				end
+			end
+			return wraycast(workspace, origin, dir, params)
+		end
+		rayproxy = setmetatable({new = new}, {__index = function(_, key) return fireraw[key] end})
+		local methods = {
+			Raycast = raycast,
+			FindPartOnRay = legacy(wfind),
+			FindPartOnRayWithIgnoreList = legacy(wignore),
+			FindPartOnRayWithWhitelist = legacy(wwhite)
+		}
+		wsproxy = setmetatable({}, {
+			__index = function(_, key)
+				if methods[key] then return methods[key] end
+				local val = workspace[key]
+				if type(val) == 'function' then return function(_, ...) return val(workspace, ...) end end
+				return val
+			end,
+			__newindex = function(_, key, val) workspace[key] = val end
+		})
+		local replace = {
+			new = new,
+			ray = rayproxy,
+			workspace = wsproxy,
+			raycast = raycast,
+			find = methods.FindPartOnRay,
+			ignore = methods.FindPartOnRayWithIgnoreList,
+			white = methods.FindPartOnRayWithWhitelist
+		}
+		local wrap = function(...)
+			if not mod.Enabled or lock > 0 then return oldhook(...) end
+			local oldray
+			local oldws
+			local hadray = false
+			local hadws = false
+			if type(fireenv) == 'table' then
+				oldray = rawget(fireenv, 'Ray')
+				oldws = rawget(fireenv, 'workspace')
+				hadray = oldray ~= nil
+				hadws = oldws ~= nil
+				pcall(function() fireenv.Ray = rayproxy end)
+				pcall(function() fireenv.workspace = wsproxy end)
+			end
+			local changed = {}
+			for _, item in ipairs(fireups) do
+				local val = replace[item[2]]
+				if val and upset(fire, item[1], val) then changed[#changed + 1] = item end
+			end
+			local out = table.pack(pcall(oldhook, ...))
+			for index = #changed, 1, -1 do
+				local item = changed[index]
+				upset(fire, item[1], item[3])
+			end
+			if type(fireenv) == 'table' then
+				pcall(function() fireenv.Ray = hadray and oldray or nil end)
+				pcall(function() fireenv.workspace = hadws and oldws or nil end)
+			end
+			if not out[1] then error(out[2], 0) end
+			return table.unpack(out, 2, out.n)
+		end
+		hooked = fn
+		if useoth and oth and type(oth.hook) == 'function' then
+			local ok = pcall(function() oldhook = oth.hook(fn, wrap) end)
+			if ok and type(oldhook) == 'function' then funoth = true return true end
+			oldhook = nil
+		end
+		if type(hookfunction) ~= 'function' then hooked = nil return false end
+		local ok = pcall(function() oldhook = hookfunction(fn, wrap) end)
+		if not ok or type(oldhook) ~= 'function' then oldhook = nil hooked = nil return false end
+		return true
+	end
+
 	local hooks = {
 		Raycast = {
 			Hook = workspace.Raycast,
@@ -400,6 +594,9 @@ return function(ctx)
 		nameoth = false
 		funoth = false
 		active = nil
+		fire = nil
+		fireenv = nil
+		fireups = {}
 		lock = 0
 	end
 
@@ -459,6 +656,11 @@ return function(ctx)
 		clear()
 		local name = method and method.Value or 'Raycast'
 		local kind = hook and hook.Value or 'Hookmetamethod'
+		if name == 'Firebullet' then
+			if not firehook(kind == 'Oth hook') then clear() return false end
+			active = name
+			return true
+		end
 		local data = hooks[name]
 		if not data then return false end
 		if data.NoNamecall or kind == 'Function hook' then
@@ -517,7 +719,7 @@ return function(ctx)
 	})
 	method = make('CreateDropdown', {
 		Name = 'Method',
-		List = {'Raycast', 'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Ray'},
+		List = {'Raycast', 'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Ray', 'Firebullet'},
 		Default = 'Raycast',
 		Function = function()
 			if mod.Enabled and not install() then mod:Toggle() end
