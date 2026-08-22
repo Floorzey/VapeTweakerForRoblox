@@ -173,16 +173,19 @@ return function(ctx)
 		if len <= 0.001 then return true end
 		local cam = workspace.CurrentCamera
 		if not cam then return false end
+		local unit = dir / len
 		local pos = cam.CFrame.Position
 		local focus = cam.Focus.Position
 		local sub = subjectpos(cam)
 		local char = type(lib) == 'table' and lib.character
 		local root = type(char) == 'table' and (char.RootPart or char.HumanoidRootPart)
+		local head = type(char) == 'table' and char.Head
 		local rootpos = typeof(root) == 'Instance' and root.Position or nil
+		local headpos = typeof(head) == 'Instance' and head.Position or nil
 		local last = origin + dir
 		local zoom = math.max((pos - focus).Magnitude, sub and (pos - sub).Magnitude or 0, rootpos and (pos - rootpos).Magnitude or 0)
-		local tight = math.clamp((zoom * 0.35) + 1, 2, 12)
-		local short = math.clamp((zoom * 4) + 32, 48, 320)
+		local tight = math.clamp((zoom * 0.4) + 1.5, 2.5, 14)
+		local short = math.clamp((zoom * 4) + 12, 16, 96)
 		if len > short then return false end
 		local function pair(a, b)
 			if typeof(a) ~= 'Vector3' or typeof(b) ~= 'Vector3' or near(a, b, tight) then return false end
@@ -191,6 +194,18 @@ return function(ctx)
 		if pair(focus, pos) or pair(pos, focus) then return true end
 		if sub and (pair(sub, pos) or pair(pos, sub) or pair(sub, focus) or pair(focus, sub)) then return true end
 		if rootpos and (pair(rootpos, pos) or pair(pos, rootpos) or pair(rootpos, focus) or pair(focus, rootpos)) then return true end
+		local rig = math.max(rootpos and headpos and (headpos - rootpos).Magnitude + 2 or 0, 4)
+		local charorigin = rootpos and near(origin, rootpos, rig) or headpos and near(origin, headpos, 3)
+		if charorigin then
+			local tocam = pos - origin
+			if tocam.Magnitude > 0.25 and unit:Dot(tocam.Unit) > 0.45 then return true end
+			if unit:Dot(-cam.CFrame.LookVector) > 0.7 then return true end
+		end
+		local anchor = sub or rootpos or focus
+		if anchor and near(origin, anchor, tight) then
+			local tocam = pos - origin
+			if tocam.Magnitude > 0.25 and unit:Dot(tocam.Unit) > 0.6 then return true end
+		end
 		return false
 	end
 
@@ -341,8 +356,8 @@ return function(ctx)
 	local function namecall(...)
 		if not mod.Enabled or skip() then return oldname(...) end
 		local ok, name = pcall(getnamecallmethod)
-		local wanted = method and method.Value or 'Auto'
-		if not ok or wanted ~= 'Auto' and name ~= wanted then return oldname(...) end
+		local wanted = method and method.Value or 'Raycast'
+		if not ok or name ~= wanted then return oldname(...) end
 		local data = hooks[name]
 		if not data or data.NoNamecall then return oldname(...) end
 		local self, args = ..., {select(2, ...)}
@@ -442,15 +457,8 @@ return function(ctx)
 
 	local function install()
 		clear()
-		local name = method and method.Value or 'Auto'
+		local name = method and method.Value or 'Raycast'
 		local kind = hook and hook.Value or 'Hookmetamethod'
-		if name == 'Auto' then
-			local nok = namehook(kind == 'Oth hook' and 'Oth hook' or 'Hookmetamethod')
-			local rok = functionhook('Ray', hooks.Ray, kind == 'Oth hook')
-			if not nok and not rok then clear() return false end
-			active = nil
-			return true
-		end
 		local data = hooks[name]
 		if not data then return false end
 		if data.NoNamecall or kind == 'Function hook' then
@@ -468,7 +476,7 @@ return function(ctx)
 		autostart = false,
 		tooltip = 'Spoofs the weapon cast origin to just behind the selected target while preserving the original direction.',
 		extratext = function()
-			return active or method and method.Value or 'Auto'
+			return active or method and method.Value or 'Raycast'
 		end,
 		func = function(on)
 			if on then
@@ -509,8 +517,8 @@ return function(ctx)
 	})
 	method = make('CreateDropdown', {
 		Name = 'Method',
-		List = {'Auto', 'Raycast', 'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Ray'},
-		Default = 'Auto',
+		List = {'Raycast', 'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Ray'},
+		Default = 'Raycast',
 		Function = function()
 			if mod.Enabled and not install() then mod:Toggle() end
 		end
@@ -527,7 +535,7 @@ return function(ctx)
 	fix = make('CreateToggle', {
 		Name = 'RayCamFix',
 		Default = true,
-		Tooltip = 'Skips camera, control, spectate and camera-obstruction casts without discarding short weapon rays from the camera.'
+		Tooltip = 'Skips camera and camera-obstruction casts, including character-to-camera geometry in Ray mode.'
 	})
 	wallbang = make('CreateToggle', {Name = 'Wallbang'})
 	range = make('CreateSlider', {
