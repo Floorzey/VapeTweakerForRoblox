@@ -25,7 +25,8 @@ return function(ctx)
 	local oldname
 	local oldhook
 	local hooked
-	local didoth = false
+	local nameoth = false
+	local funoth = false
 	local lock = 0
 	local silent
 	local resume = false
@@ -180,23 +181,16 @@ return function(ctx)
 		local rootpos = typeof(root) == 'Instance' and root.Position or nil
 		local last = origin + dir
 		local zoom = math.max((pos - focus).Magnitude, sub and (pos - sub).Magnitude or 0, rootpos and (pos - rootpos).Magnitude or 0)
-		local core = math.clamp(zoom + 8, 10, 96)
-		local short = math.clamp((zoom * 6) + 24, 32, 320)
-		local function anchor(point, radius)
-			if near(point, pos, radius) or near(point, focus, radius) then return true end
-			if sub and near(point, sub, radius) then return true end
-			return rootpos and near(point, rootpos, radius) or false
+		local tight = math.clamp((zoom * 0.35) + 1, 2, 12)
+		local short = math.clamp((zoom * 4) + 32, 48, 320)
+		if len > short then return false end
+		local function pair(a, b)
+			if typeof(a) ~= 'Vector3' or typeof(b) ~= 'Vector3' or near(a, b, tight) then return false end
+			return near(origin, a, tight) and near(last, b, tight)
 		end
-		if len <= 8 and anchor(origin, 8) then return true end
-		if len <= short and anchor(origin, core) and anchor(last, core) then return true end
-		if len <= short then
-			if near(origin, focus, core) and near(last, pos, core) then return true end
-			if near(origin, pos, core) and near(last, focus, core) then return true end
-			if sub and near(origin, sub, core) and near(last, pos, core) then return true end
-			if sub and near(origin, pos, core) and near(last, sub, core) then return true end
-			if rootpos and near(origin, rootpos, core) and near(last, pos, core) then return true end
-			if rootpos and near(origin, pos, core) and near(last, rootpos, core) then return true end
-		end
+		if pair(focus, pos) or pair(pos, focus) then return true end
+		if sub and (pair(sub, pos) or pair(pos, sub) or pair(sub, focus) or pair(focus, sub)) then return true end
+		if rootpos and (pair(rootpos, pos) or pair(pos, rootpos) or pair(rootpos, focus) or pair(focus, rootpos)) then return true end
 		return false
 	end
 
@@ -347,7 +341,8 @@ return function(ctx)
 	local function namecall(...)
 		if not mod.Enabled or skip() then return oldname(...) end
 		local ok, name = pcall(getnamecallmethod)
-		if not ok or name ~= (method and method.Value or 'Raycast') then return oldname(...) end
+		local wanted = method and method.Value or 'Auto'
+		if not ok or wanted ~= 'Auto' and name ~= wanted then return oldname(...) end
 		local data = hooks[name]
 		if not data or data.NoNamecall then return oldname(...) end
 		local self, args = ..., {select(2, ...)}
@@ -367,7 +362,7 @@ return function(ctx)
 
 	local function clear()
 		if oldhook and hooked then
-			if didoth and oth and type(oth.unhook) == 'function' then
+			if funoth and oth and type(oth.unhook) == 'function' then
 				pcall(oth.unhook, hooked)
 			elseif type(restorefunction) == 'function' then
 				pcall(restorefunction, hooked)
@@ -376,7 +371,7 @@ return function(ctx)
 			end
 		end
 		if oldname then
-			if didoth and oth and type(oth.unhook) == 'function' and type(getrawmetatable) == 'function' then
+			if nameoth and oth and type(oth.unhook) == 'function' and type(getrawmetatable) == 'function' then
 				pcall(oth.unhook, getrawmetatable(game).__namecall)
 			elseif type(hookmetamethod) == 'function' then
 				pcall(hookmetamethod, game, '__namecall', oldname)
@@ -387,61 +382,83 @@ return function(ctx)
 		oldname = nil
 		oldhook = nil
 		hooked = nil
-		didoth = false
+		nameoth = false
+		funoth = false
 		active = nil
 		lock = 0
 	end
 
-	local function install()
-		clear()
-		local name = method and method.Value or 'Raycast'
-		local data = hooks[name]
-		if not data then return false end
-		local kind = hook and hook.Value or 'Hookmetamethod'
-		if data.NoNamecall then kind = 'Function hook' end
-		if kind == 'Function hook' then
-			if type(data.Hook) ~= 'function' or type(hookfunction) ~= 'function' then return false end
-			hooked = data.Hook
-			local wrap
-			wrap = function(...)
-				if not mod.Enabled or skip() then return oldhook(...) end
-				if data.NoSelf then
-					local args = {...}
-					local changed = runargs(data, args)
-					if changed then active = name end
-					return oldhook(table.unpack(args))
-				end
-				local self, args = ..., {select(2, ...)}
-				if data.Result then
-					local val = oldhook(self, table.unpack(args))
-					local out, changed = runresult(data, val)
-					if changed then active = name end
-					return out
-				end
-				local changed, result = runargs(data, args)
-				if changed then
-					active = name
-					if type(result) == 'table' then return table.unpack(result) end
-				end
-				return oldhook(self, table.unpack(args))
+	local function functionhook(name, data, useoth)
+		if oldhook or type(data) ~= 'table' or type(data.Hook) ~= 'function' then return false end
+		hooked = data.Hook
+		local wrap
+		wrap = function(...)
+			if not mod.Enabled or skip() then return oldhook(...) end
+			if data.NoSelf then
+				local args = {...}
+				local changed = runargs(data, args)
+				if changed then active = name end
+				return oldhook(table.unpack(args))
 			end
-			local ok = pcall(function() oldhook = hookfunction(data.Hook, wrap) end)
-			if not ok or type(oldhook) ~= 'function' then clear() return false end
-			active = name
-			return true
+			local self, args = ..., {select(2, ...)}
+			if data.Result then
+				local val = oldhook(self, table.unpack(args))
+				local out, changed = runresult(data, val)
+				if changed then active = name end
+				return out
+			end
+			local changed, result = runargs(data, args)
+			if changed then
+				active = name
+				if type(result) == 'table' then return table.unpack(result) end
+			end
+			return oldhook(self, table.unpack(args))
 		end
-		if data.NoNamecall or type(getnamecallmethod) ~= 'function' then return false end
+		if useoth and oth and type(oth.hook) == 'function' then
+			local ok = pcall(function() oldhook = oth.hook(data.Hook, wrap) end)
+			if ok and type(oldhook) == 'function' then funoth = true return true end
+			oldhook = nil
+		end
+		if type(hookfunction) ~= 'function' then hooked = nil return false end
+		local ok = pcall(function() oldhook = hookfunction(data.Hook, wrap) end)
+		if not ok or type(oldhook) ~= 'function' then oldhook = nil hooked = nil return false end
+		return true
+	end
+
+	local function namehook(kind)
+		if oldname or type(getnamecallmethod) ~= 'function' then return false end
 		if kind == 'Oth hook' then
 			if not oth or type(oth.hook) ~= 'function' or type(getrawmetatable) ~= 'function' then return false end
 			local ok = pcall(function() oldname = oth.hook(getrawmetatable(game).__namecall, namecall) end)
-			if not ok or type(oldname) ~= 'function' then clear() return false end
-			didoth = true
-			active = name
+			if not ok or type(oldname) ~= 'function' then oldname = nil return false end
+			nameoth = true
 			return true
 		end
 		if type(hookmetamethod) ~= 'function' then return false end
 		local ok = pcall(function() oldname = hookmetamethod(game, '__namecall', namecall) end)
-		if not ok or type(oldname) ~= 'function' then clear() return false end
+		if not ok or type(oldname) ~= 'function' then oldname = nil return false end
+		return true
+	end
+
+	local function install()
+		clear()
+		local name = method and method.Value or 'Auto'
+		local kind = hook and hook.Value or 'Hookmetamethod'
+		if name == 'Auto' then
+			local nok = namehook(kind == 'Oth hook' and 'Oth hook' or 'Hookmetamethod')
+			local rok = functionhook('Ray', hooks.Ray, kind == 'Oth hook')
+			if not nok and not rok then clear() return false end
+			active = nil
+			return true
+		end
+		local data = hooks[name]
+		if not data then return false end
+		if data.NoNamecall or kind == 'Function hook' then
+			if not functionhook(name, data, kind == 'Oth hook') then clear() return false end
+			active = name
+			return true
+		end
+		if not namehook(kind) then clear() return false end
 		active = name
 		return true
 	end
@@ -451,7 +468,7 @@ return function(ctx)
 		autostart = false,
 		tooltip = 'Spoofs the weapon cast origin to just behind the selected target while preserving the original direction.',
 		extratext = function()
-			return active or method and method.Value or 'Raycast'
+			return active or method and method.Value or 'Auto'
 		end,
 		func = function(on)
 			if on then
@@ -491,9 +508,9 @@ return function(ctx)
 		Function = updatecircle
 	})
 	method = make('CreateDropdown', {
-		Name = 'Cast Method',
-		List = {'Raycast', 'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Ray'},
-		Default = 'Raycast',
+		Name = 'Method',
+		List = {'Auto', 'Raycast', 'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Ray'},
+		Default = 'Auto',
 		Function = function()
 			if mod.Enabled and not install() then mod:Toggle() end
 		end
@@ -510,7 +527,7 @@ return function(ctx)
 	fix = make('CreateToggle', {
 		Name = 'RayCamFix',
 		Default = true,
-		Tooltip = 'Skips camera, control, spectate and camera-obstruction casts using caller and camera-subject geometry.'
+		Tooltip = 'Skips camera, control, spectate and camera-obstruction casts without discarding short weapon rays from the camera.'
 	})
 	wallbang = make('CreateToggle', {Name = 'Wallbang'})
 	range = make('CreateSlider', {
