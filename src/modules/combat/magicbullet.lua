@@ -1,31 +1,32 @@
 return function(ctx)
 	local mod
-	local meth
+	local back
 	local detect
 	local targets
 	local part
 	local fov
 	local range
 	local chance
-	local force
+	local walls
 	local lib = ctx.vape and ctx.vape.Libraries and ctx.vape.Libraries.entity
 	local info = ctx.vape and ctx.vape.Libraries and ctx.vape.Libraries.targetinfo
 	local players = game:GetService('Players')
-	local input = game:GetService('UserInputService')
 	local rep = game:GetService('ReplicatedStorage')
 	local lplr = players.LocalPlayer
-	local mouse = lplr and lplr:GetMouse()
-	local cam = workspace.CurrentCamera
-	local rand = Random.new()
-	local state = {}
-	local gamehook
+	local rng = Random.new()
+	local list = {}
+	local map = {}
+	local live
+	local hand
 	local silent
 	local resume = false
 	local busy = false
 	local cache = {t = 0}
 	local roll = {t = 0, v = true}
-	local good = {'aim', 'bullet', 'combat', 'firearm', 'gun', 'projectile', 'raycast', 'rifle', 'shoot', 'shot', 'weapon'}
+	local hooks = {}
+	local good = {'aim', 'ballistic', 'bullet', 'combat', 'firearm', 'gun', 'projectile', 'raycast', 'rifle', 'shoot', 'shot', 'weapon'}
 	local bad = {'camera', 'control', 'ground', 'occlusion', 'path', 'visibility'}
+	local api = {}
 
 	local function lower(v)
 		return tostring(v or ''):lower()
@@ -39,7 +40,7 @@ return function(ctx)
 		return false
 	end
 
-	local function fullname(v)
+	local function full(v)
 		if typeof(v) ~= 'Instance' then return '' end
 		local ok, s = pcall(v.GetFullName, v)
 		return ok and lower(s) or lower(v.Name)
@@ -57,68 +58,61 @@ return function(ctx)
 		return ok and v == true
 	end
 
-	local function mode(v)
-		local m = meth and meth.Value or 'Auto'
-		if m == 'Auto' then
-			if gamehook then return v == 'Game' end
-			return v == 'Raycast' or v == 'Legacy' or v == 'Camera' or v == 'Input'
-		end
-		return m == v
-	end
-
 	local function tool()
 		local c = lplr and lplr.Character
 		return c and c:FindFirstChildOfClass('Tool') ~= nil
 	end
 
-	local function allow(k, o, d)
+	local function origin(o)
+		if typeof(o) ~= 'Vector3' then return false end
+		local cam = workspace.CurrentCamera
+		if cam and (o - cam.CFrame.Position).Magnitude <= 32 then return true end
+		local c = lplr and lplr.Character
+		local r = c and (c:FindFirstChild('HumanoidRootPart') or c.PrimaryPart)
+		return r and (o - r.Position).Magnitude <= 32 or false
+	end
+
+	local function allow(o, d)
 		if busy or not mod.Enabled or cc() then return false end
-		if detect and detect.Value == 'All' then return true end
+		if typeof(o) ~= 'Vector3' or typeof(d) ~= 'Vector3' or d.Magnitude < 1 then return false end
 		local c = caller()
 		if c then
-			local s = fullname(c)
+			local s = full(c)
 			if has(s, bad) then return false end
 			if has(s, good) then return true end
 		end
-		if typeof(o) == 'Vector3' and typeof(d) == 'Vector3' then
-			if d.Magnitude < 1 then return false end
-			cam = workspace.CurrentCamera
-			local near = cam and (o - cam.CFrame.Position).Magnitude <= 32
-			local root = lib and lib.isAlive and lib.character and (lib.character.RootPart or lib.character.HumanoidRootPart)
-			near = near or root and (o - root.Position).Magnitude <= 32
-			if not near then return false end
-			if cam and d.Magnitude > 0 and d.Unit:Dot(cam.CFrame.LookVector) < -0.35 then return false end
-			return true
-		end
-		return (k == 'Mouse' or k == 'Input' or k == 'Camera') and tool()
+		if detect and detect.Value == 'Loose' then return origin(o) end
+		return tool() and origin(o) and d.Magnitude >= 16
 	end
 
 	local function shot()
 		local now = os.clock()
-		if now - roll.t > 0.02 then
+		if now - roll.t > 0.025 then
 			roll.t = now
-			roll.v = rand:NextNumber(0, 100) <= (chance and chance.Value or 100)
+			roll.v = rng:NextNumber(0, 100) <= (chance and chance.Value or 100)
 		end
 		return roll.v
 	end
 
 	local function pick(o)
 		if not shot() or type(lib) ~= 'table' or not lib.isAlive or type(lib.EntityMouse) ~= 'function' then return end
-		cam = workspace.CurrentCamera
 		local now = os.clock()
-		if now - cache.t <= 0.012 and cache.h and cache.h.Parent then
+		if now - cache.t <= 0.015 and cache.h and cache.h.Parent then
 			if typeof(o) ~= 'Vector3' or (cache.h.Position - o).Magnitude <= (range and range.Value or 1000) then
 				return cache.e, cache.h
 			end
 		end
 		local n = part and part.Value or 'Head'
+		busy = true
 		local ok, e = pcall(lib.EntityMouse, {
 			Range = fov and fov.Value or 360,
 			Part = n,
-			Origin = o,
 			Players = not targets or not targets.Players or targets.Players.Enabled ~= false,
-			NPCs = targets and targets.NPCs and targets.NPCs.Enabled == true
+			NPCs = targets and targets.NPCs and targets.NPCs.Enabled == true,
+			Wallcheck = targets and targets.Walls and targets.Walls.Enabled == true,
+			Origin = o
 		})
+		busy = false
 		if not ok or not e then return end
 		local h = e[n] or e.Head or e.RootPart or e.HumanoidRootPart
 		if typeof(h) ~= 'Instance' or not h:IsA('BasePart') then return end
@@ -130,16 +124,21 @@ return function(ctx)
 		return e, h
 	end
 
-	local function line(h)
-		local y = math.max(h.Size.Y * 0.5 + 0.75, 1)
-		return h.Position + Vector3.new(0, y, 0), Vector3.new(0, -(y * 2 + 0.5), 0)
+	local function point(h, o)
+		local p = h.Position
+		if typeof(o) == 'Vector3' and type(h.GetClosestPointOnSurface) == 'function' then
+			local ok, v = pcall(h.GetClosestPointOnSurface, h, o)
+			if ok and typeof(v) == 'Vector3' then p = v end
+		end
+		return p
 	end
 
-	local function params(p, h)
-		if not force or force.Enabled == false then return p end
+	local function params(p, e, h)
+		if not walls or walls.Enabled == false then return p end
 		local n = RaycastParams.new()
 		n.FilterType = Enum.RaycastFilterType.Include
-		n.FilterDescendantsInstances = {h}
+		local c = e and (e.Character or e.Model)
+		n.FilterDescendantsInstances = {typeof(c) == 'Instance' and c or h}
 		if p then
 			pcall(function() n.CollisionGroup = p.CollisionGroup end)
 			pcall(function() n.IgnoreWater = p.IgnoreWater end)
@@ -148,229 +147,285 @@ return function(ctx)
 		return n
 	end
 
-	local function list(t, h)
-		if type(t) ~= 'table' then return t end
-		local n = {}
-		for _, v in ipairs(t) do
-			local skip = false
-			if typeof(v) == 'Instance' then
-				local ok, r = pcall(h.IsDescendantOf, h, v)
-				skip = ok and r
-			end
-			if not skip then table.insert(n, v) end
-		end
-		return n
-	end
-
-	local function ray(o, d)
-		busy = true
-		local ok, r = pcall(Ray.new, o, d)
-		busy = false
-		return ok and r or nil
-	end
-
-	local function screen()
-		cam = workspace.CurrentCamera
-		if not cam then return end
-		local e, h = pick(cam.CFrame.Position)
-		if not e then return end
-		local p, vis = cam:WorldToViewportPoint(h.Position)
-		if not vis then return end
-		return e, h, Vector2.new(p.X, p.Y)
-	end
-
-
-	local function gamecall(f, ...)
-		if not mode('Game') or busy or not mod.Enabled or cc() then return f(...) end
-		local a = table.pack(...)
-		local oi
-		local di
-		local pi
-		local o
-		local d
-		for i = 1, a.n do
-			local v = a[i]
-			if typeof(v) == 'Vector3' then
-				if not oi then oi, o = i, v elseif not di then di, d = i, v end
-			elseif typeof(v) == 'RaycastParams' then
-				pi = i
-			end
-		end
-		if not oi or not di or not allow('Game', o, d) then return f(...) end
+	local function redirect(o, d, p)
+		if not allow(o, d) then return end
 		local e, h = pick(o)
-		if not e then return f(...) end
-		local no, nd = line(h)
-		a[oi], a[di] = no, nd
-		if pi then a[pi] = params(a[pi], h) end
-		busy = true
-		local r = table.pack(pcall(f, table.unpack(a, 1, a.n)))
-		busy = false
-		if not r[1] then return f(...) end
-		return table.unpack(r, 2, r.n)
+		if not e then return end
+		local q = point(h, o)
+		local v = q - o
+		if v.Magnitude <= 0.001 then return end
+		local pad = math.max(h.Size.X, h.Size.Y, h.Size.Z) + 2
+		local n = v.Unit * math.max(d.Magnitude, v.Magnitude + pad)
+		return n, params(p, e, h), e, h
 	end
 
-	local function cleargame()
-		if not gamehook then return end
-		local t, old, fn = gamehook.t, gamehook.old, gamehook.fn
-		if type(t) == 'table' and rawget(t, 'Raycast') == fn then pcall(rawset, t, 'Raycast', old) end
-		gamehook = nil
+	function api:redirect(o, d, p)
+		return redirect(o, d, p)
 	end
 
-	local function setgame()
-		cleargame()
-		if not mode('Game') then return false end
-		local root = rep:FindFirstChild('ModuleScript')
-		local obj = root and root:FindFirstChild('GameCommonMethod')
-		if not obj or not obj:IsA('ModuleScript') then return false end
-		local ok, t = pcall(require, obj)
-		if not ok or type(t) ~= 'table' or type(rawget(t, 'Raycast')) ~= 'function' then return false end
-		local old = rawget(t, 'Raycast')
-		local fn = function(...)
-			return gamecall(old, ...)
-		end
-		local yes = pcall(rawset, t, 'Raycast', fn)
-		if not yes or rawget(t, 'Raycast') ~= fn then return false end
-		gamehook = {t = t, old = old, fn = fn}
+	function api:target(o)
+		return pick(o)
+	end
+
+	function api:register(d)
+		if type(d) ~= 'table' or type(d.name) ~= 'string' or d.name == '' or type(d.start) ~= 'function' then return false end
+		if map[d.name] then return false end
+		d.priority = tonumber(d.priority) or 0
+		map[d.name] = d
+		list[#list + 1] = d
+		table.sort(list, function(a, b) return a.priority > b.priority end)
 		return true
 	end
 
-	local function namehook()
-		if state.name or type(hookmetamethod) ~= 'function' or type(getnamecallmethod) ~= 'function' then return state.name end
-		local old
-		local fn = function(self, ...)
-			if busy or not mod.Enabled or cc() then return old(self, ...) end
-			local ok, m = pcall(getnamecallmethod)
-			if not ok then return old(self, ...) end
-			local a = table.pack(...)
-			if self == workspace and m == 'Raycast' and mode('Raycast') then
-				local o, d = a[1], a[2]
-				if allow('Raycast', o, d) then
-					local e, h = pick(o)
-					if e then
-						local no, nd = line(h)
-						a[1], a[2], a[3] = no, nd, params(a[3], h)
+	function api:unregister(n)
+		local d = map[n]
+		if not d or live == d then return false end
+		map[n] = nil
+		for i = #list, 1, -1 do
+			if list[i] == d then table.remove(list, i) break end
+		end
+		return true
+	end
+
+	function api:backend()
+		return live and live.name or nil
+	end
+
+	function api:adapters()
+		local out = {}
+		for _, d in ipairs(list) do out[#out + 1] = {name = d.name, priority = d.priority} end
+		return out
+	end
+
+	local function stop()
+		local h = hand
+		hand = nil
+		live = nil
+		if type(h) == 'table' and type(h.stop) == 'function' then pcall(h.stop, h) end
+		cache.t = 0
+	end
+
+	local function start(d, probe)
+		local ok, h = pcall(d.start, d, api, probe)
+		if not ok or h == false then
+			ctx.log:add('module', 'Magic Bullet', ok and 'backend start returned false' or h)
+			return false
+		end
+		live = d
+		hand = type(h) == 'table' and h or {}
+		return true
+	end
+
+	local function choose()
+		stop()
+		local v = back and back.Value or 'Auto'
+		for _, d in ipairs(list) do
+			local pass = v == 'Auto' or v == 'Game' and d.kind == 'game' or v == 'Raycast' and d.kind == 'ray'
+			if pass then
+				local ok, p = pcall(d.probe or function() return true end, d, api)
+				if ok and p then
+					if start(d, p) then return true end
+				elseif not ok then
+					ctx.log:add('module', 'Magic Bullet', p)
+				end
+			end
+		end
+		return false
+	end
+
+	local rayad
+	rayad = {
+		name = 'Raycast',
+		kind = 'ray',
+		priority = 10,
+		probe = function()
+			if type(hookmetamethod) == 'function' and type(getnamecallmethod) == 'function' then return 'namecall' end
+			if type(hookfunction) == 'function' and type(workspace.Raycast) == 'function' then return 'function' end
+		end,
+		start = function(_, _, kind)
+			if kind == 'namecall' then
+				if not hooks.name then
+					local old
+					local fn = function(self, ...)
+						if live ~= rayad or not mod.Enabled or busy or cc() or self ~= workspace then return old(self, ...) end
+						local ok, m = pcall(getnamecallmethod)
+						if not ok or m ~= 'Raycast' and m ~= 'Spherecast' then return old(self, ...) end
+						local a = table.pack(...)
+						local o
+						local d
+						local pi
+						if m == 'Raycast' then
+							o, d, pi = a[1], a[2], 3
+						else
+							o, d, pi = a[1], a[3], 4
+						end
+						local nd, np = redirect(o, d, a[pi])
+						if not nd then return old(self, ...) end
+						if m == 'Raycast' then a[2], a[3] = nd, np else a[3], a[4] = nd, np end
 						busy = true
 						local r = table.pack(pcall(old, self, table.unpack(a, 1, a.n)))
 						busy = false
 						if r[1] then return table.unpack(r, 2, r.n) end
+						return old(self, ...)
 					end
+					local ok = pcall(function() old = hookmetamethod(game, '__namecall', fn) end)
+					if not ok or type(old) ~= 'function' then return false end
+					hooks.name = {old = old, fn = fn}
 				end
-			elseif self == workspace and mode('Legacy') and (m == 'FindPartOnRay' or m == 'FindPartOnRayWithIgnoreList' or m == 'FindPartOnRayWithWhitelist') then
-				local r = a[1]
-				if typeof(r) == 'Ray' and allow('Legacy', r.Origin, r.Direction) then
-					local e, h = pick(r.Origin)
-					if e then
-						local no, nd = line(h)
-						a[1] = ray(no, nd)
-						if m == 'FindPartOnRayWithWhitelist' then a[2] = {h} elseif m == 'FindPartOnRayWithIgnoreList' then a[2] = list(a[2], h) end
-					end
-				end
-			elseif typeof(self) == 'Instance' and self.ClassName == 'Camera' and mode('Camera') and (m == 'ScreenPointToRay' or m == 'ViewportPointToRay') and allow('Camera') then
-				local e, h = pick(self.CFrame.Position)
-				if e then
-					local no, nd = line(h)
-					local r = ray(no, nd.Unit)
-					if r then return r end
-				end
-			elseif self == input and m == 'GetMouseLocation' and mode('Input') and allow('Input') then
-				local e, h, p = screen()
-				if e then return p end
+				return {}
 			end
-			return old(self, ...)
+			if not hooks.ray then
+				local old
+				local fn = function(self, o, d, p)
+					if live ~= rayad or not mod.Enabled or busy or cc() or self ~= workspace then return old(self, o, d, p) end
+					local nd, np = redirect(o, d, p)
+					if not nd then return old(self, o, d, p) end
+					busy = true
+					local r = table.pack(pcall(old, self, o, nd, np))
+					busy = false
+					if r[1] then return table.unpack(r, 2, r.n) end
+					return old(self, o, d, p)
+				end
+				local ok = pcall(function() old = hookfunction(workspace.Raycast, fn) end)
+				if not ok or type(old) ~= 'function' then return false end
+				hooks.ray = {old = old, fn = fn}
+			end
+			return {}
 		end
-		local ok = pcall(function() old = hookmetamethod(game, '__namecall', fn) end)
-		if ok and type(old) == 'function' then state.name = true end
-		return state.name == true
-	end
+	}
 
-	local function clearhooks()
-		if type(restorefunction) ~= 'function' or type(getrawmetatable) ~= 'function' then return false end
-		local ok, mt = pcall(getrawmetatable, game)
-		if not ok or type(mt) ~= 'table' then return false end
-		local complete = true
-		if state.index then
-			local done = type(mt.__index) == 'function' and pcall(restorefunction, mt.__index)
-			if done then state.index = nil else complete = false end
-		end
-		if state.name then
-			local done = type(mt.__namecall) == 'function' and pcall(restorefunction, mt.__namecall)
-			if done then state.name = nil else complete = false end
-		end
-		return complete
-	end
+	api:register(rayad)
 
-	local function indexhook()
-		if state.index or type(hookmetamethod) ~= 'function' or not mouse then return state.index end
-		local old
-		local fn = function(self, k)
-			if self == mouse and mod.Enabled and mode('Mouse') and not busy and not cc() and allow('Mouse') then
-				local s = tostring(k)
-				if s == 'Hit' or s == 'hit' or s == 'Target' or s == 'target' or s == 'UnitRay' then
-					local e, h = screen()
-					if e then
-						if s == 'Target' or s == 'target' then return h end
-						if s == 'Hit' or s == 'hit' then return h.CFrame end
-						cam = workspace.CurrentCamera
-						local o = cam and cam.CFrame.Position or h.Position
-						return ray(o, (h.Position - o).Unit)
+	local gamead
+	gamead = {
+		name = 'GameCommon',
+		kind = 'game',
+		priority = 500,
+		probe = function()
+			local root = rep:FindFirstChild('ModuleScript')
+			local obj = root and root:FindFirstChild('GameCommonMethod')
+			if not obj or not obj:IsA('ModuleScript') then return end
+			local ok, t = pcall(require, obj)
+			local f = ok and type(t) == 'table' and rawget(t, 'Raycast') or nil
+			if type(f) ~= 'function' then return end
+			return {obj = obj, tab = t, fn = f}
+		end,
+		start = function(_, _, p)
+			local t = p.tab
+			local f = p.fn
+			if hooks.game and hooks.game.fn == f then
+				hooks.game.on = true
+				local rec = hooks.game
+				return {stop = function() rec.on = false end}
+			end
+			if type(hookfunction) == 'function' then
+				local old
+				local rec = {fn = f, on = true}
+				local fn = function(...)
+					if not rec.on or live ~= gamead or not mod.Enabled or busy or cc() then return old(...) end
+					local a = table.pack(...)
+					local oi
+					local di
+					local pi
+					local o
+					local d
+					for i = 1, a.n do
+						local v = a[i]
+						if typeof(v) == 'Vector3' then
+							if not oi then oi, o = i, v elseif not di then di, d = i, v end
+						elseif typeof(v) == 'RaycastParams' then
+							pi = i
+						end
 					end
+					if not oi or not di then return old(...) end
+					local nd, np = redirect(o, d, pi and a[pi] or nil)
+					if not nd then return old(...) end
+					a[di] = nd
+					if pi then a[pi] = np end
+					busy = true
+					local r = table.pack(pcall(old, table.unpack(a, 1, a.n)))
+					busy = false
+					if r[1] then return table.unpack(r, 2, r.n) end
+					return old(...)
+				end
+				local ok = pcall(function() old = hookfunction(f, fn) end)
+				if ok and type(old) == 'function' then
+					rec.old = old
+					rec.wrap = fn
+					hooks.game = rec
+					return {stop = function() rec.on = false end}
 				end
 			end
-			return old(self, k)
+			local old = f
+			local fn = function(...)
+				if live ~= gamead or not mod.Enabled or busy or cc() then return old(...) end
+				local a = table.pack(...)
+				local oi
+				local di
+				local pi
+				local o
+				local d
+				for i = 1, a.n do
+					local v = a[i]
+					if typeof(v) == 'Vector3' then
+						if not oi then oi, o = i, v elseif not di then di, d = i, v end
+					elseif typeof(v) == 'RaycastParams' then
+						pi = i
+					end
+				end
+				if not oi or not di then return old(...) end
+				local nd, np = redirect(o, d, pi and a[pi] or nil)
+				if not nd then return old(...) end
+				a[di] = nd
+				if pi then a[pi] = np end
+				busy = true
+				local r = table.pack(pcall(old, table.unpack(a, 1, a.n)))
+				busy = false
+				if r[1] then return table.unpack(r, 2, r.n) end
+				return old(...)
+			end
+			local ok = pcall(rawset, t, 'Raycast', fn)
+			if not ok or rawget(t, 'Raycast') ~= fn then return false end
+			return {
+				stop = function()
+					if rawget(t, 'Raycast') == fn then pcall(rawset, t, 'Raycast', old) end
+				end
+			}
 		end
-		local ok = pcall(function() old = hookmetamethod(game, '__index', fn) end)
-		if ok and type(old) == 'function' then state.index = true end
-		return state.index == true
-	end
+	}
 
-	local function install()
-		local m = meth and meth.Value or 'Auto'
-		cleargame()
-		clearhooks()
-		if m == 'Game' then return setgame() end
-		if m == 'Mouse' then return indexhook() end
-		if m == 'Auto' then
-			if setgame() then return true end
-			return namehook()
-		end
-		return namehook()
-	end
-
+	api:register(gamead)
 	local function warn()
 		local vape = ctx.vapeapi and ctx.vapeapi.object
 		if type(vape) == 'table' and type(vape.CreateNotification) == 'function' then
-			pcall(vape.CreateNotification, vape, 'Magic Bullet', 'No compatible hook surface was found for this method.', 6, 'warning')
+			pcall(vape.CreateNotification, vape, 'Magic Bullet', 'No supported game adapter or ray hook is available.', 6, 'warning')
 		end
 	end
 
 	mod = ctx:module('combat', {
 		name = 'Magic Bullet',
 		autostart = false,
-		tooltip = 'Redirects supported weapon hit queries through the selected target part.',
+		tooltip = 'Redirects supported weapon hit queries using game adapters first and a conservative ray fallback.',
 		extratext = function()
-			local v = meth and meth.Value or 'Auto'
-			if v == 'Auto' and gamehook then return 'Game' end
-			return v
+			return live and live.name or back and back.Value or 'Auto'
 		end,
 		func = function(on)
 			if on then
 				silent = ctx:find('SilentAim', 'combat') or ctx:find('SilentAim')
 				resume = type(silent) == 'table' and silent.Enabled == true
 				if resume and type(silent.Toggle) == 'function' then pcall(silent.Toggle, silent) end
-				if not install() then
+				if not choose() then
 					warn()
 					task.defer(function() if mod.Enabled then mod:Toggle() end end)
-					return
 				end
 			else
-				cleargame()
-				clearhooks()
-				cache.t = 0
+				stop()
 				if resume and type(silent) == 'table' and not silent.Enabled and type(silent.Toggle) == 'function' then pcall(silent.Toggle, silent) end
 				resume = false
 			end
 		end
 	})
+	ctx.magicbullet = api
 
 	local function make(n, d)
 		local f = mod[n]
@@ -380,35 +435,31 @@ return function(ctx)
 		ctx.log:add('module', 'Magic Bullet', v)
 	end
 
-	meth = make('CreateDropdown', {
-		Name = 'Method',
-		List = {'Auto', 'Game', 'Raycast', 'Mouse', 'Input', 'Legacy', 'Camera'},
+	back = make('CreateDropdown', {
+		Name = 'Backend',
+		List = {'Auto', 'Game', 'Raycast'},
 		Default = 'Auto',
 		Function = function()
 			cache.t = 0
-			if mod.Enabled then
-				cleargame()
-				clearhooks()
-				if not install() then warn() mod:Toggle() end
-			end
+			if mod.Enabled and not choose() then warn() mod:Toggle() end
 		end
 	})
-
-	detect = make('CreateDropdown', {Name = 'Detection', List = {'Smart', 'All'}, Default = 'Smart'})
+	detect = make('CreateDropdown', {Name = 'Call Filter', List = {'Strict', 'Loose'}, Default = 'Strict'})
 	targets = make('CreateTargets', {Players = true})
-	part = make('CreateDropdown', {Name = 'Part', List = {'Head', 'RootPart'}, Default = 'Head'})
-	fov = make('CreateSlider', {Name = 'FOV', Min = 1, Max = 1000, Default = 360, Suffix = 'px'})
+	part = make('CreateDropdown', {Name = 'Aim Part', List = {'Head', 'RootPart'}, Default = 'Head'})
+	fov = make('CreateSlider', {Name = 'Aim FOV', Min = 1, Max = 1000, Default = 360, Suffix = 'px'})
 	range = make('CreateSlider', {
-		Name = 'Range',
+		Name = 'Max Range',
 		Min = 1,
 		Max = 1000,
 		Default = 1000,
 		Suffix = function(v) return v == 1 and 'stud' or 'studs' end
 	})
-	chance = make('CreateSlider', {Name = 'Hit Chance', Min = 0, Max = 100, Default = 100, Suffix = '%'})
-	force = make('CreateToggle', {Name = 'Force Target Filter', Default = true})
+	chance = make('CreateSlider', {Name = 'Chance', Min = 0, Max = 100, Default = 100, Suffix = '%'})
+	walls = make('CreateToggle', {Name = 'Wallbang', Default = true})
+
 	ctx:clean(function()
-		cleargame()
-		clearhooks()
+		stop()
+		if ctx.magicbullet == api then ctx.magicbullet = nil end
 	end)
 end
