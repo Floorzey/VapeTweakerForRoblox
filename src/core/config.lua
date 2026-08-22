@@ -412,11 +412,13 @@ return function(ctx)
 			end
 			for name, saved in pairs(self.data.modules or {}) do
 				local item = ctx.mods[name]
-				if item and type(saved.enabled) == 'boolean' and item.obj.Enabled ~= saved.enabled
-					and type(item.obj.Toggle) == 'function' then
-					local toggled, err = pcall(item.obj.Toggle, item.obj, true)
-					if not toggled or item.obj.Enabled ~= saved.enabled then
-						fail(name, toggled and 'module state did not change' or err)
+				if item and type(saved.enabled) == 'boolean' then
+					local enabled = saved.enabled == true and item.autostart ~= false
+					if item.obj.Enabled ~= enabled and type(item.obj.Toggle) == 'function' then
+						local toggled, err = pcall(item.obj.Toggle, item.obj, true)
+						if not toggled or item.obj.Enabled ~= enabled then
+							fail(name, toggled and 'module state did not change' or err)
+						end
 					end
 				end
 			end

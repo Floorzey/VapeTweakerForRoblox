@@ -179,9 +179,6 @@ return function(ctx)
 		return e, h, Vector2.new(p.X, p.Y)
 	end
 
-	local function wrap(f)
-		return type(newcclosure) == 'function' and newcclosure(f) or f
-	end
 
 	local function gamecall(f, ...)
 		if not mode('Game') or busy or not mod.Enabled or cc() then return f(...) end
@@ -240,7 +237,7 @@ return function(ctx)
 	local function namehook()
 		if state.name or type(hookmetamethod) ~= 'function' or type(getnamecallmethod) ~= 'function' then return state.name end
 		local old
-		local fn = wrap(function(self, ...)
+		local fn = function(self, ...)
 			if busy or not mod.Enabled or cc() then return old(self, ...) end
 			local ok, m = pcall(getnamecallmethod)
 			if not ok then return old(self, ...) end
@@ -268,7 +265,7 @@ return function(ctx)
 						if m == 'FindPartOnRayWithWhitelist' then a[2] = {h} elseif m == 'FindPartOnRayWithIgnoreList' then a[2] = list(a[2], h) end
 					end
 				end
-			elseif typeof(self) == 'Instance' and self:IsA('Camera') and mode('Camera') and (m == 'ScreenPointToRay' or m == 'ViewportPointToRay') and allow('Camera') then
+			elseif typeof(self) == 'Instance' and self.ClassName == 'Camera' and mode('Camera') and (m == 'ScreenPointToRay' or m == 'ViewportPointToRay') and allow('Camera') then
 				local e, h = pick(self.CFrame.Position)
 				if e then
 					local no, nd = line(h)
@@ -280,16 +277,32 @@ return function(ctx)
 				if e then return p end
 			end
 			return old(self, ...)
-		end)
+		end
 		local ok = pcall(function() old = hookmetamethod(game, '__namecall', fn) end)
 		if ok and type(old) == 'function' then state.name = true end
 		return state.name == true
 	end
 
+	local function clearhooks()
+		if type(restorefunction) ~= 'function' or type(getrawmetatable) ~= 'function' then return false end
+		local ok, mt = pcall(getrawmetatable, game)
+		if not ok or type(mt) ~= 'table' then return false end
+		local complete = true
+		if state.index then
+			local done = type(mt.__index) == 'function' and pcall(restorefunction, mt.__index)
+			if done then state.index = nil else complete = false end
+		end
+		if state.name then
+			local done = type(mt.__namecall) == 'function' and pcall(restorefunction, mt.__namecall)
+			if done then state.name = nil else complete = false end
+		end
+		return complete
+	end
+
 	local function indexhook()
 		if state.index or type(hookmetamethod) ~= 'function' or not mouse then return state.index end
 		local old
-		local fn = wrap(function(self, k)
+		local fn = function(self, k)
 			if self == mouse and mod.Enabled and mode('Mouse') and not busy and not cc() and allow('Mouse') then
 				local s = tostring(k)
 				if s == 'Hit' or s == 'hit' or s == 'Target' or s == 'target' or s == 'UnitRay' then
@@ -304,7 +317,7 @@ return function(ctx)
 				end
 			end
 			return old(self, k)
-		end)
+		end
 		local ok = pcall(function() old = hookmetamethod(game, '__index', fn) end)
 		if ok and type(old) == 'function' then state.index = true end
 		return state.index == true
@@ -313,6 +326,7 @@ return function(ctx)
 	local function install()
 		local m = meth and meth.Value or 'Auto'
 		cleargame()
+		clearhooks()
 		if m == 'Game' then return setgame() end
 		if m == 'Mouse' then return indexhook() end
 		if m == 'Auto' then
@@ -331,6 +345,7 @@ return function(ctx)
 
 	mod = ctx:module('combat', {
 		name = 'Magic Bullet',
+		autostart = false,
 		tooltip = 'Redirects supported weapon hit queries through the selected target part.',
 		extratext = function()
 			local v = meth and meth.Value or 'Auto'
@@ -349,6 +364,7 @@ return function(ctx)
 				end
 			else
 				cleargame()
+				clearhooks()
 				cache.t = 0
 				if resume and type(silent) == 'table' and not silent.Enabled and type(silent.Toggle) == 'function' then pcall(silent.Toggle, silent) end
 				resume = false
@@ -372,6 +388,7 @@ return function(ctx)
 			cache.t = 0
 			if mod.Enabled then
 				cleargame()
+				clearhooks()
 				if not install() then warn() mod:Toggle() end
 			end
 		end
@@ -390,4 +407,8 @@ return function(ctx)
 	})
 	chance = make('CreateSlider', {Name = 'Hit Chance', Min = 0, Max = 100, Default = 100, Suffix = '%'})
 	force = make('CreateToggle', {Name = 'Force Target Filter', Default = true})
+	ctx:clean(function()
+		cleargame()
+		clearhooks()
+	end)
 end

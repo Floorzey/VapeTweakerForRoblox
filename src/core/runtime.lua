@@ -77,7 +77,8 @@ return function(ctx)
 			obj = mod,
 			layer = load.layer or 'runtime',
 			scope = load.scope or 'universal',
-			path = load.path
+			path = load.path,
+			autostart = def.autostart ~= false
 		}
 		self.mods[name] = data
 		self.modorder[#self.modorder + 1] = data

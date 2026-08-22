@@ -740,8 +740,8 @@ return function(ctx)
 		local row = mod.Object
 		cleanstale(row)
 		local pal = getpalette()
-		local normal = '            '..mod.Name:gsub(' ', '')
-		local edittext = '    '..mod.Name:gsub(' ', '')
+		local normal = '            '..mod.Name
+		local edittext = '    '..mod.Name
 		row.Text = normal
 
 		local star = Instance.new('TextButton')
@@ -1037,7 +1037,7 @@ return function(ctx)
 		row.BackgroundColor3 = pal.main
 		row.BorderSizePixel = 0
 		row.AutoButtonColor = false
-		row.Text = '            '..mod.Name:gsub(' ', '')
+		row.Text = '            '..mod.Name
 		row.TextXAlignment = Enum.TextXAlignment.Left
 		row.TextColor3 = dark(pal.text, 0.16)
 		row.TextSize = 14
@@ -1231,8 +1231,8 @@ return function(ctx)
 		if not data or type(mod) ~= 'table' or not isinst(data.row) then return end
 		local hidden = ishidden(name)
 		data.row.Visible = state.editing or not hidden
-		data.row.Text = state.editing and ('    '..mod.Name:gsub(' ', ''))
-			or ('            '..mod.Name:gsub(' ', ''))
+		data.row.Text = state.editing and ('    '..mod.Name)
+			or ('            '..mod.Name)
 		data.rail.Visible = state.editing
 		data.hiddenbox.Visible = state.editing
 		data.dotsbutton.Visible = not state.editing
