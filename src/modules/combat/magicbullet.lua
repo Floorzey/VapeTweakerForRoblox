@@ -9,9 +9,19 @@ return function(ctx)
 	local chance
 	local part
 	local fix
+	local wallbang
+	local circle
+	local circlecolor
+	local circletransparency
+	local circlefilled
+	local circleobject
 	local lib = ctx.vape and ctx.vape.Libraries and ctx.vape.Libraries.entity
 	local info = ctx.vape and ctx.vape.Libraries and ctx.vape.Libraries.targetinfo
 	local rng = Random.new()
+	local input = game:GetService('UserInputService')
+	local run = game:GetService('RunService')
+	local whitelist = RaycastParams.new()
+	whitelist.FilterType = Enum.RaycastFilterType.Include
 	local oldname
 	local oldhook
 	local hooked
@@ -59,6 +69,46 @@ return function(ctx)
 		'transparencycontroller',
 		'zoomcontroller'
 	}
+
+	local function mousepos()
+		local cam = workspace.CurrentCamera
+		if input.TouchEnabled and cam then return cam.ViewportSize / 2 end
+		return input:GetMouseLocation()
+	end
+
+	local function removecircle()
+		if circleobject then
+			pcall(function() circleobject.Visible = false end)
+			pcall(function() circleobject:Remove() end)
+			circleobject = nil
+		end
+	end
+
+	local function updatecircle()
+		if not circleobject then return end
+		local shown = mod and mod.Enabled and circle and circle.Enabled and mode and mode.Value == 'Mouse'
+		pcall(function()
+			circleobject.Visible = shown == true
+			circleobject.Position = mousepos()
+			circleobject.Radius = range and range.Value or 150
+			circleobject.Filled = circlefilled and circlefilled.Enabled == true or false
+			circleobject.Color = Color3.fromHSV(circlecolor and circlecolor.Hue or 0, circlecolor and circlecolor.Sat or 0, circlecolor and circlecolor.Value or 1)
+			circleobject.Transparency = 1 - (circletransparency and circletransparency.Value or 0.5)
+		end)
+	end
+
+	local function makecircle()
+		removecircle()
+		if not circle or not circle.Enabled or not Drawing or type(Drawing.new) ~= 'function' then return end
+		local ok, obj = pcall(Drawing.new, 'Circle')
+		if not ok or not obj then return end
+		circleobject = obj
+		pcall(function()
+			obj.NumSides = 100
+			obj.Thickness = 1
+		end)
+		updatecircle()
+	end
 
 	local function lower(val)
 		return tostring(val or ''):lower()
@@ -172,7 +222,7 @@ return function(ctx)
 		if not ent then return end
 		local pos = spoof(hit, dir)
 		if not pos then return end
-		return pos
+		return pos, hit
 	end
 
 	local hooks = {
@@ -181,8 +231,16 @@ return function(ctx)
 			Args = function(args)
 				local origin, dir = args[1], args[2]
 				if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or rayguard(origin, dir) then return end
-				local pos = cast(origin, dir)
-				if pos then args[1] = pos return true end
+				local pos, hit = cast(origin, dir)
+				if pos then
+					args[1] = pos
+					if wallbang and wallbang.Enabled and hit then
+						whitelist.FilterDescendantsInstances = {hit}
+						pcall(function() whitelist.CollisionGroup = hit.CollisionGroup end)
+						args[3] = whitelist
+					end
+					return true
+				end
 			end
 		},
 		FindPartOnRayWithIgnoreList = {
@@ -190,8 +248,14 @@ return function(ctx)
 			Args = function(args)
 				local ray = args[1]
 				if typeof(ray) ~= 'Ray' or rayguard(ray.Origin, ray.Direction) then return end
-				local pos = cast(ray.Origin, ray.Direction, {args[2]})
-				if pos then args[1] = Ray.new(pos, ray.Direction) return true end
+				local pos, hit = cast(ray.Origin, ray.Direction, {args[2]})
+				if pos then
+					args[1] = Ray.new(pos, ray.Direction)
+					if wallbang and wallbang.Enabled and hit then
+						return true, {hit, hit.Position, hit:GetClosestPointOnSurface(ray.Origin), hit.Material}
+					end
+					return true
+				end
 			end
 		},
 		ScreenPointToRay = {
@@ -225,9 +289,10 @@ return function(ctx)
 	local function runargs(data, args)
 		if type(data.Args) ~= 'function' then return false end
 		lock += 1
-		local ok, val = pcall(data.Args, args)
+		local out = table.pack(pcall(data.Args, args))
 		lock -= 1
-		return ok and val == true
+		if not out[1] then return false end
+		return out[2] == true, out[3]
 	end
 
 	local function runresult(data, val)
@@ -252,7 +317,11 @@ return function(ctx)
 			if changed then active = name end
 			return out
 		end
-		if runargs(data, args) then active = name end
+		local changed, result = runargs(data, args)
+		if changed then
+			active = name
+			if type(result) == 'table' then return table.unpack(result) end
+		end
 		return oldname(self, table.unpack(args))
 	end
 
@@ -298,7 +367,8 @@ return function(ctx)
 				if not mod.Enabled or skip() then return oldhook(...) end
 				if data.NoSelf then
 					local args = {...}
-					if runargs(data, args) then active = name end
+					local changed = runargs(data, args)
+					if changed then active = name end
 					return oldhook(table.unpack(args))
 				end
 				local self, args = ..., {select(2, ...)}
@@ -308,7 +378,11 @@ return function(ctx)
 					if changed then active = name end
 					return out
 				end
-				if runargs(data, args) then active = name end
+				local changed, result = runargs(data, args)
+				if changed then
+					active = name
+					if type(result) == 'table' then return table.unpack(result) end
+				end
 				return oldhook(self, table.unpack(args))
 			end
 			local ok = pcall(function() oldhook = hookfunction(data.Hook, wrap) end)
@@ -341,6 +415,7 @@ return function(ctx)
 		end,
 		func = function(on)
 			if on then
+				updatecircle()
 				silent = ctx:find('SilentAim', 'combat') or ctx:find('SilentAim')
 				resume = type(silent) == 'table' and silent.Enabled == true
 				if resume and type(silent.Toggle) == 'function' then pcall(silent.Toggle, silent) end
@@ -352,6 +427,7 @@ return function(ctx)
 					task.defer(function() if mod.Enabled then mod:Toggle() end end)
 				end
 			else
+				updatecircle()
 				clear()
 				if resume and type(silent) == 'table' and not silent.Enabled and type(silent.Toggle) == 'function' then pcall(silent.Toggle, silent) end
 				resume = false
@@ -371,7 +447,8 @@ return function(ctx)
 	mode = make('CreateDropdown', {
 		Name = 'Target Mode',
 		List = {'Mouse', 'Position'},
-		Default = 'Mouse'
+		Default = 'Mouse',
+		Function = updatecircle
 	})
 	method = make('CreateDropdown', {
 		Name = 'Cast Method',
@@ -395,15 +472,50 @@ return function(ctx)
 		Default = true,
 		Tooltip = 'Skips camera, control and camera-obstruction rays when spoofing cast origins.'
 	})
+	wallbang = make('CreateToggle', {Name = 'Wallbang'})
 	range = make('CreateSlider', {
 		Name = 'Range',
 		Min = 1,
 		Max = 1000,
 		Default = 150,
-		Suffix = function(v) return mode and mode.Value == 'Mouse' and 'px' or v == 1 and 'stud' or 'studs' end
+		Suffix = function(v) return mode and mode.Value == 'Mouse' and 'px' or v == 1 and 'stud' or 'studs' end,
+		Function = updatecircle
 	})
 	chance = make('CreateSlider', {Name = 'Hit Chance', Min = 0, Max = 100, Default = 100, Suffix = '%'})
 	part = make('CreateDropdown', {Name = 'Part', List = {'Head', 'RootPart'}, Default = 'Head'})
+	circle = make('CreateToggle', {
+		Name = 'Range Circle',
+		Function = function(on)
+			if on then makecircle() else removecircle() end
+			if circlecolor and circlecolor.Object then circlecolor.Object.Visible = on end
+			if circletransparency and circletransparency.Object then circletransparency.Object.Visible = on end
+			if circlefilled and circlefilled.Object then circlefilled.Object.Visible = on end
+		end
+	})
+	circlecolor = make('CreateColorSlider', {
+		Name = 'Circle Color',
+		Darker = true,
+		Visible = false,
+		Function = updatecircle
+	})
+	circletransparency = make('CreateSlider', {
+		Name = 'Transparency',
+		Min = 0,
+		Max = 1,
+		Decimal = 10,
+		Default = 0.5,
+		Darker = true,
+		Visible = false,
+		Function = updatecircle
+	})
+	circlefilled = make('CreateToggle', {
+		Name = 'Circle Filled',
+		Darker = true,
+		Visible = false,
+		Function = updatecircle
+	})
 
+	ctx:clean(run.RenderStepped:Connect(updatecircle))
+	ctx:clean(removecircle)
 	ctx:clean(clear)
 end
