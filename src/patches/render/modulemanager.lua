@@ -238,15 +238,6 @@ return function(ctx)
 		return 'configs/profiles/'..dir..'/'..tostring(id or placeid())..'.lua'
 	end
 
-	local function legacyconfigpath(dir)
-		dir = dir or ctx.profile and ctx.profile.dir or 'default'
-		return 'configs/profiles/'..dir..'/gui.json'
-	end
-
-	local function migrationpath(dir)
-		dir = dir or ctx.profile and ctx.profile.dir or 'default'
-		return 'configs/profiles/'..dir..'/placeconfigs.migrated'
-	end
 
 	local function luastr(value)
 		return string.format('%q', tostring(value))
@@ -359,11 +350,6 @@ return function(ctx)
 			created = true
 		end
 
-		if not data and not ctx.store:has(migrationpath(profile)) then
-			local legacy = ctx.store:json(legacyconfigpath(profile))
-			if type(legacy) == 'table' then data = legacy end
-			ctx.store:write(migrationpath(profile), placeid())
-		end
 
 		state.favorites = tomap(data and data.favorites)
 		state.hidden = tomap(data and data.hidden)

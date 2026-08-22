@@ -122,7 +122,7 @@ return function(ctx)
 			Wallcheck = walls and not walls.Enabled and true or nil,
 			Part = name,
 			Origin = origin,
-			Players = targets and targets.Players and targets.Players.Enabled ~= false,
+			Players = not targets or not targets.Players or targets.Players.Enabled ~= false,
 			NPCs = targets and targets.NPCs and targets.NPCs.Enabled == true
 		})
 		if not ent then return end
@@ -269,12 +269,12 @@ return function(ctx)
 	local function warn()
 		local vape = ctx.vapeapi and ctx.vapeapi.object
 		if type(vape) == 'table' and type(vape.CreateNotification) == 'function' then
-			pcall(vape.CreateNotification, vape, 'MagicBullet', 'No supported function hook is available.', 5, 'warning')
+			pcall(vape.CreateNotification, vape, 'Magic Bullet', 'No supported function hook is available.', 5, 'warning')
 		end
 	end
 
 	mod = ctx:module('combat', {
-		name = 'MagicBullet',
+		name = 'Magic Bullet',
 		tooltip = 'Redirects weapon raycasts towards nearby targets without requiring crosshair alignment.',
 		extratext = function()
 			return meth and meth.Value or 'Auto'
@@ -309,7 +309,21 @@ return function(ctx)
 		end
 	})
 
-	meth = mod:CreateDropdown({
+	local function make(name, data)
+		local fn = mod[name]
+		if type(fn) ~= 'function' then
+			ctx.log:add('module', 'Magic Bullet', name..' is unavailable')
+			return
+		end
+		local ok, val = pcall(fn, mod, data)
+		if not ok then
+			ctx.log:add('module', 'Magic Bullet', val)
+			return
+		end
+		return val
+	end
+
+	meth = make('CreateDropdown', {
 		Name = 'Method',
 		List = {'Auto', 'Raycast', 'Legacy', 'Camera', 'Ray'},
 		Default = 'Auto',
@@ -321,23 +335,23 @@ return function(ctx)
 		end
 	})
 
-	detect = mod:CreateDropdown({
+	detect = make('CreateDropdown', {
 		Name = 'Detection',
 		List = {'Smart', 'All'},
 		Default = 'Smart'
 	})
 
-	targets = mod:CreateTargets({
+	targets = make('CreateTargets', {
 		Players = true
 	})
 
-	part = mod:CreateDropdown({
+	part = make('CreateDropdown', {
 		Name = 'Part',
 		List = {'Head', 'RootPart'},
 		Default = 'Head'
 	})
 
-	range = mod:CreateSlider({
+	range = make('CreateSlider', {
 		Name = 'Range',
 		Min = 1,
 		Max = 1000,
@@ -347,8 +361,9 @@ return function(ctx)
 		end
 	})
 
-	walls = mod:CreateToggle({
+	walls = make('CreateToggle', {
 		Name = 'Wallbang',
 		Default = false
 	})
+
 end

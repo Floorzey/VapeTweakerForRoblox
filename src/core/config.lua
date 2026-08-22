@@ -1,6 +1,5 @@
 return function(ctx)
-	local scopes = {'universal', 'game', 'build', 'place'}
-	local rank = {universal = 1, game = 2, build = 3, place = 4}
+	local scopes = {'place'}
 	local config = {
 		version = 1,
 		paths = {},
@@ -140,15 +139,11 @@ return function(ctx)
 		local base = 'configs/profiles/'..ctx.profile.dir..'/'
 		local target = ctx.target
 		self.paths = {
-			universal = base..'universal.json',
-			game = base..'game-'..tostring(target.gameid)..'.json',
-			build = base..'build-'..tostring(target.buildid)..'.json',
 			place = base..'place-'..tostring(target.placeid)..'.json'
 		}
-		self.legacy = target.gameid ~= target.placeid and {
-			game = base..tostring(target.gameid)..'.json',
+		self.legacy = {
 			place = base..tostring(target.placeid)..'.json'
-		} or {}
+		}
 	end
 
 	local function fieldowner(config, key, name, field, declared)
@@ -158,7 +153,7 @@ return function(ctx)
 			local item = layer and layer[key] and layer[key][name]
 			if item and item[field] ~= nil then return scope end
 		end
-		return rank[declared] and declared or 'universal'
+		return 'place'
 	end
 
 	local function optionowner(config, key, name, option, declared)
@@ -171,7 +166,7 @@ return function(ctx)
 				if options[option] ~= nil then return scope end
 			end
 		end
-		return rank[declared] and declared or 'universal'
+		return 'place'
 	end
 
 	local function record(data, key, name)

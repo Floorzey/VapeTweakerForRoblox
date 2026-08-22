@@ -7,6 +7,35 @@ return function(ctx)
 	local lp = players.LocalPlayer
 	local fix
 	local use
+	local fun = mod.Options and mod.Options['Function hook']
+	local oth = mod.Options and mod.Options['Oth hook']
+
+	if type(fun) == 'table' then patch:manage(fun, 'Function hook') end
+	if type(oth) == 'table' then patch:manage(oth, 'Oth hook') end
+
+	local on = mod.Enabled == true
+	if on and type(mod.Toggle) == 'function' then pcall(mod.Toggle, mod) end
+	for _, opt in ipairs({fun, oth}) do
+		if type(opt) == 'table' and opt.Enabled and type(opt.Toggle) == 'function' then pcall(opt.Toggle, opt) end
+	end
+	if on and type(mod.Toggle) == 'function' and not mod.Enabled then pcall(mod.Toggle, mod) end
+
+	fix = patch:option('toggle', {
+		name = 'RayCamFix',
+		default = true,
+		darker = true,
+		tooltip = 'Prevents Ray.new SilentAim from redirecting camera and control rays.'
+	})
+	if fix and fix.Object then fix.Object.Visible = false end
+	ctx.raycamfix = fix
+
+	use = patch:option('toggle', {
+		name = 'Use Hitboxes',
+		default = false,
+		tooltip = 'Uses the HitBoxes part and expand amount for SilentAim targeting.'
+	})
+	if use and use.Object then use.Object.Visible = false end
+	ctx.usehitboxes = use
 
 	local function ups(fn)
 		local get = debug and debug.getupvalues or getupvalues
@@ -45,23 +74,6 @@ return function(ctx)
 		ctx.log:add('patch', 'SilentAimfix', 'SilentAim hook table was not found')
 		return
 	end
-
-	fix = patch:option('toggle', {
-		name = 'RayCamFix',
-		default = true,
-		darker = true,
-		tooltip = 'Prevents Ray.new SilentAim from redirecting camera and control rays.'
-	})
-	if fix and fix.Object then fix.Object.Visible = false end
-	ctx.raycamfix = fix
-
-	use = patch:option('toggle', {
-		name = 'Use Hitboxes',
-		default = false,
-		tooltip = 'Uses the HitBoxes part and expand amount for SilentAim targeting.'
-	})
-	if use and use.Object then use.Object.Visible = false end
-	ctx.usehitboxes = use
 
 	local ray = hooks.Ray
 	local old = type(ray) == 'table' and ray.Function or ray
