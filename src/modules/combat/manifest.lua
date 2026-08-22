@@ -1,0 +1,5 @@
+return {
+	files = {
+		'magicbullet.lua'
+	}
+}
