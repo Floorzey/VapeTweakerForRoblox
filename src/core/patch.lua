@@ -180,6 +180,26 @@ return function(ctx)
 		return self:_touch(opt, '@value', 'set', data)
 	end
 
+	function patchmeta:list(opt, data)
+		if type(opt) ~= 'table' or type(data) ~= 'table' then return false end
+		return self:_touch(opt, '@list', 'set', data)
+	end
+
+	function patchmeta:visible(opt, val)
+		if type(opt) ~= 'table' then return false end
+		return self:_touch(opt, '@visible', 'set', val == true)
+	end
+
+	function patchmeta:bind(obj, data)
+		if type(obj) ~= 'table' then return false end
+		return self:_touch(obj, '@bind', 'set', data)
+	end
+
+	function patchmeta:callback(fn, obj)
+		if type(fn) ~= 'function' then return false end
+		return self:_touch(obj, 'Function', 'set', fn)
+	end
+
 	function patchmeta:option(kind, def)
 		if type(def) ~= 'table' or type(def.name) ~= 'string' or def.name == '' then return nil end
 		if type(self.mod.Options) ~= 'table' then return nil end

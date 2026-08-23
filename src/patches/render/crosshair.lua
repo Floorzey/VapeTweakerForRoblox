@@ -138,9 +138,9 @@ return function(ctx)
 	local function optionvisibility()
 		if not style then return end
 		local selected = style.Value
-		if gap then gap.Object.Visible = selected == 'Classic' end
-		if thickness then thickness.Object.Visible = selected ~= 'Dot' end
-		if outlinewidth then outlinewidth.Object.Visible = outline.Enabled end
+		if gap then ctx.vapeapi:setvisible(gap, selected == 'Classic') end
+		if thickness then ctx.vapeapi:setvisible(thickness, selected ~= 'Dot') end
+		if outlinewidth then ctx.vapeapi:setvisible(outlinewidth, outline.Enabled) end
 	end
 
 	local function draw()

@@ -263,7 +263,7 @@ return function(ctx)
 		List = {'OneShot', 'Toggle'},
 		Default = 'OneShot',
 		Function = function(val)
-			if time and time.Object then time.Object.Visible = val == 'OneShot' end
+			if time then ctx.vapeapi:setvisible(time, val == 'OneShot') end
 			if not mod.Enabled then return end
 			stop()
 			if meth.Value == 'Raknet' and not ready() then
@@ -283,7 +283,7 @@ return function(ctx)
 		Suffix = 's'
 	})
 
-	if time.Object then time.Object.Visible = mode.Value == 'OneShot' end
+	ctx.vapeapi:setvisible(time, mode.Value == 'OneShot')
 
 	ctx:clean(stop)
 end

@@ -26,7 +26,7 @@ return function(ctx)
 		darker = true,
 		tooltip = 'Prevents ray hooks from redirecting camera, control, spectate and camera-obstruction casts.'
 	})
-	if fix and fix.Object then fix.Object.Visible = false end
+	if fix then patch:visible(fix, false) end
 	ctx.raycamfix = fix
 
 	use = patch:option('toggle', {
@@ -34,7 +34,7 @@ return function(ctx)
 		default = false,
 		tooltip = 'Uses the HitBoxes part and expand amount for SilentAim targeting.'
 	})
-	if use and use.Object then use.Object.Visible = false end
+	if use then patch:visible(use, false) end
 	ctx.usehitboxes = use
 
 	local function ups(fn)

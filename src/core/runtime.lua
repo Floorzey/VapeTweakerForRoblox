@@ -174,6 +174,7 @@ return function(ctx)
 		return {
 			vape = self.vape == self.vapeapi.object and self.vape.Loaded ~= nil,
 			readiness = self.vapeapi.readiness,
+			adapter = type(self.vapeapi.capabilities) == 'function' and self.vapeapi:capabilities() or {},
 			categories = cats,
 			filesystem = table.clone(self.store.fs),
 			profile = self.profile and self.profile.name or 'default',

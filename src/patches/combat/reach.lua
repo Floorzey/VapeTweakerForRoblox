@@ -1,93 +1,37 @@
 return function(ctx)
 	if ctx.vapeapi.flavor ~= 'new' then return end
-	local mod = ctx:find('Reach', 'combat') or ctx:find('Reach')
-	if type(mod) ~= 'table' or type(mod.Options) ~= 'table' then return end
-	local mode = mod.Options.Mode
-	local range = mod.Options.Range
-	local chance = mod.Options.Chance
-	if type(mode) ~= 'table' or type(mode.Change) ~= 'function' or type(mode.SetValue) ~= 'function' or type(range) ~= 'table' then return end
-	if type(mod.Function) ~= 'function' then return end
+	local patch = ctx:patch('Reach', 'ReachMethods', 'combat')
+	if not patch then return end
+	local mod = patch.mod
+	local mode = mod.Options and mod.Options.Mode
+	local range = mod.Options and mod.Options.Range
+	local chance = mod.Options and mod.Options.Chance
+	if type(mode) ~= 'table' or type(range) ~= 'table' then return end
+	local ok, base = ctx.vapeapi:getprop(mod, 'Function')
+	if not ok or type(base) ~= 'function' then
+		ctx.log:add('patch', 'ReachMethods', 'Reach callback is unavailable')
+		return
+	end
+	local _, has = ctx.vapeapi:getlist(mode)
+	if not has then
+		ctx.log:add('patch', 'ReachMethods', 'Reach mode list is unavailable')
+		return
+	end
 
 	local players = game:GetService('Players')
 	local input = game:GetService('UserInputService')
 	local lp = players.LocalPlayer
 	local check = type(checkcaller) == 'function' and checkcaller or function() return false end
-	local base = mod.Function
-	local set = mode.SetValue
 	local box
 	local rad
 	local boxold
 	local radold
-	local boxfn
-	local radfn
 	local con
 	local tool
 	local stamp = 0
 	local grips = {}
-	local tips = {}
+	local vis = chance and select(1, ctx.vapeapi:getvisible(chance))
 	local list = {'TouchInterest', 'Resize', 'HitboxQuery', 'GripOffset'}
-	local props
-	local oldlist
-
-	local function getprops()
-		if ctx.vapeapi and type(ctx.vapeapi.settings) == 'function' then
-			local ok, val = pcall(ctx.vapeapi.settings, ctx.vapeapi, mode)
-			if ok and type(val) == 'table' and type(val.List) == 'table' then return val end
-		end
-		local get = debug and debug.getupvalues or getupvalues
-		if type(get) ~= 'function' then return nil end
-		for _, fn in ipairs({mode.Change, mode.SetValue, mode.Load, mode.Save}) do
-			if type(fn) == 'function' then
-				local ok, vals = pcall(get, fn)
-				if ok and type(vals) == 'table' then
-					for _, val in pairs(vals) do
-						if type(val) == 'table' and val.Name == 'Mode' and type(val.List) == 'table' then return val end
-					end
-				end
-			end
-		end
-	end
-
-	local function setlist(vals)
-		if props and type(props.List) == 'table' then
-			table.clear(props.List)
-			for i, val in ipairs(vals) do props.List[i] = val end
-			return true
-		end
-		if type(mode.Change) == 'function' then
-			local ok = pcall(mode.Change, mode, vals)
-			return ok
-		end
-		return false
-	end
-
-	props = getprops()
-	if props and type(props.List) == 'table' then oldlist = table.clone(props.List) end
-
-	local function tooltip()
-		local gets = getconnections
-		local get = debug and debug.getupvalue or getupvalue
-		local set2 = debug and debug.setupvalue or setupvalue
-		local obj = mode.Object
-		if type(gets) ~= 'function' or type(get) ~= 'function' or type(set2) ~= 'function' or not obj then return end
-		local ok, cons = pcall(gets, obj.MouseEnter)
-		if not ok or type(cons) ~= 'table' then return end
-		local text = 'TouchInterest - Fake touches\nResize - Enlarges tool\nHitboxQuery - Expands attack queries\nGripOffset - Moves tool forward'
-		for _, con2 in pairs(cons) do
-			local fn = con2.Function
-			if type(fn) == 'function' then
-				for i = 1, 20 do
-					local out = table.pack(pcall(get, fn, i))
-					if not out[1] or out[2] == nil then break end
-					local val = out.n >= 3 and out[3] or out[2]
-					if type(val) == 'string' and val:find('TouchInterest - Reports fake collision events', 1, true) then
-						if pcall(set2, fn, i, text) then tips[#tips + 1] = {fn = fn, idx = i, old = val, set = set2} end
-						break
-					end
-				end
-			end
-		end
-	end
 
 	local function gettool()
 		local char = lp and lp.Character
@@ -108,7 +52,9 @@ return function(ctx)
 	end
 
 	local function arm(obj)
-		if mod.Enabled and mode.Value == 'HitboxQuery' and obj and obj == gettool() then stamp = os.clock() + 0.8 end
+		if mod.Enabled and mode.Value == 'HitboxQuery' and obj and obj == gettool() then
+			stamp = os.clock() + 0.8
+		end
 	end
 
 	local function bind(obj)
@@ -149,8 +95,6 @@ return function(ctx)
 		end
 		boxold = nil
 		radold = nil
-		boxfn = nil
-		radfn = nil
 	end
 
 	local function hook()
@@ -159,26 +103,28 @@ return function(ctx)
 		box = workspace.GetPartBoundsInBox
 		rad = workspace.GetPartBoundsInRadius
 		if type(box) == 'function' then
-			boxfn = function(self, cf, size, params)
+			local fn
+			fn = function(self, cf, size, params)
 				if mod.Enabled and mode.Value == 'HitboxQuery' and not check() and boxok(cf, size) then
 					local val = math.max(tonumber(range.Value) or 0, 0)
 					if val > 0 then size += Vector3.new(val * 2, val * 2, val * 2) end
 				end
 				return boxold(self, cf, size, params)
 			end
-			local ok, old = pcall(hookfunction, box, boxfn)
-			if ok and type(old) == 'function' then boxold = old else boxfn = nil end
+			local ok2, val = pcall(hookfunction, box, fn)
+			if ok2 and type(val) == 'function' then boxold = val end
 		end
 		if type(rad) == 'function' then
-			radfn = function(self, pos, size, params)
+			local fn
+			fn = function(self, pos, size, params)
 				if mod.Enabled and mode.Value == 'HitboxQuery' and not check() and radok(pos, size) then
 					local val = math.max(tonumber(range.Value) or 0, 0)
 					if val > 0 then size += val end
 				end
 				return radold(self, pos, size, params)
 			end
-			local ok, old = pcall(hookfunction, rad, radfn)
-			if ok and type(old) == 'function' then radold = old else radfn = nil end
+			local ok2, val = pcall(hookfunction, rad, fn)
+			if ok2 and type(val) == 'function' then radold = val end
 		end
 	end
 
@@ -187,8 +133,8 @@ return function(ctx)
 		if not char or not obj then return nil end
 		for _, val in ipairs(char:GetDescendants()) do
 			if val.Name == 'RightGrip' and (val:IsA('Motor6D') or val:IsA('Weld')) then
-				local p1 = val.Part1
-				if p1 and p1:IsDescendantOf(obj) then return val end
+				local part = val.Part1
+				if part and part:IsDescendantOf(obj) then return val end
 			end
 		end
 	end
@@ -230,11 +176,13 @@ return function(ctx)
 		restore()
 	end
 
-	local fun = function(callback)
+	local function show()
+		if chance then ctx.vapeapi:setvisible(chance, mode.Value == 'TouchInterest') end
+	end
+
+	local function run(callback)
 		local val = mode.Value
-		if val == 'TouchInterest' or val == 'Resize' then
-			return base(callback)
-		end
+		if val == 'TouchInterest' or val == 'Resize' then return base(callback) end
 		if not callback then clean() return end
 		if val == 'HitboxQuery' then
 			bind(gettool())
@@ -242,46 +190,37 @@ return function(ctx)
 			repeat
 				bind(gettool())
 				task.wait()
-			until not mod.Enabled
+			until not mod.Enabled or mode.Value ~= 'HitboxQuery'
 			clean()
 		elseif val == 'GripOffset' then
 			repeat
 				grip()
 				task.wait()
-			until not mod.Enabled
+			until not mod.Enabled or mode.Value ~= 'GripOffset'
 			clean()
 		end
 	end
 
-	local setfn = function(self, val, click)
-		local reload = click and mod.Enabled and val ~= self.Value
-		if reload then mod:Toggle() end
-		local out = table.pack(set(self, val, click))
-		if reload then mod:Toggle() end
-		return table.unpack(out, 1, out.n)
+	if not patch:callback(run) then error('Reach callback patch failed', 0) end
+	if not patch:list(mode, list) then error('Reach mode list patch failed', 0) end
+	patch:set('Tooltip', 'Changes reach method', mode)
+	if type(mode.SetValue) == 'function' then
+		patch:wrap('SetValue', function(oldfn, self, val, click)
+			local reload = mod.Enabled and val ~= self.Value
+			if reload then mod:Toggle() end
+			local out = table.pack(oldfn(self, val, click))
+			show()
+			if reload then mod:Toggle() end
+			return table.unpack(out, 1, out.n)
+		end, mode)
 	end
-
-	mod.Function = fun
-	mode.SetValue = setfn
-	if not setlist(list) then error('Reach mode list is unavailable', 0) end
-	if props and type(props.List) == 'table' then
-		for i, val in ipairs(list) do
-			if props.List[i] ~= val then error('Reach mode list update failed', 0) end
-		end
-	end
-	tooltip()
-	if chance and chance.Object then chance.Object.Visible = mode.Value == 'TouchInterest' end
+	show()
 	ctx:clean(input.InputBegan:Connect(function(obj, gameproc)
 		if gameproc then return end
 		if obj.UserInputType == Enum.UserInputType.MouseButton1 then arm(gettool()) end
 	end))
 	ctx:clean(function()
 		clean()
-		if mod.Function == fun then mod.Function = base end
-		if mode.SetValue == setfn then mode.SetValue = set end
-		for _, rec in ipairs(tips) do pcall(rec.set, rec.fn, rec.idx, rec.old) end
-		table.clear(tips)
-		setlist(oldlist or {'TouchInterest', 'Resize'})
-		if chance and chance.Object then chance.Object.Visible = mode.Value == 'TouchInterest' end
+		if chance and vis ~= nil then ctx.vapeapi:setvisible(chance, vis) end
 	end)
 end

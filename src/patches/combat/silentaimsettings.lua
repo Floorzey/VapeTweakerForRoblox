@@ -20,17 +20,19 @@ return function(ctx)
 		return
 	end
 	if type(vape.Settings) ~= 'table' then return end
-	local fv = fun.Object and fun.Object.Visible
-	local ov = oth.Object and oth.Object.Visible
-	local uv = use and use.Object and use.Object.Visible
-	if fun.Object then fun.Object.Visible = false end
-	if oth.Object then oth.Object.Visible = false end
-	if fix and fix.Object then fix.Object.Visible = false end
-	if use and use.Object then use.Object.Visible = false end
+	local fv = select(1, ctx.vapeapi:getvisible(fun))
+	local ov = select(1, ctx.vapeapi:getvisible(oth))
+	local xv = fix and select(1, ctx.vapeapi:getvisible(fix))
+	local uv = use and select(1, ctx.vapeapi:getvisible(use))
+	ctx.vapeapi:setvisible(fun, false)
+	ctx.vapeapi:setvisible(oth, false)
+	if fix then ctx.vapeapi:setvisible(fix, false) end
+	if use then ctx.vapeapi:setvisible(use, false) end
 	ctx:clean(function()
-		if fun.Object then fun.Object.Visible = fv end
-		if oth.Object then oth.Object.Visible = ov end
-		if use and use.Object then use.Object.Visible = uv end
+		if fv ~= nil then ctx.vapeapi:setvisible(fun, fv) end
+		if ov ~= nil then ctx.vapeapi:setvisible(oth, ov) end
+		if fix and xv ~= nil then ctx.vapeapi:setvisible(fix, xv) end
+		if use and uv ~= nil then ctx.vapeapi:setvisible(use, uv) end
 	end)
 	local pane = main:CreateSettingsPane({Name = 'Silent Aim'})
 	local btn = main.Buttons and main.Buttons['Silent Aim']

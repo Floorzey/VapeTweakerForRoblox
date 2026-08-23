@@ -5,6 +5,7 @@ return function(ctx)
 		owned = {},
 		optioninfo = setmetatable({}, {__mode = 'k'}),
 		settingscache = setmetatable({}, {__mode = 'k'}),
+		propcache = setmetatable({}, {__mode = 'k'}),
 		readiness = 'waiting'
 	}
 
@@ -27,7 +28,12 @@ return function(ctx)
 	local function detectgui(vape, configured)
 		if type(vape) ~= 'table' or type(vape.Categories) ~= 'table' then return configured end
 		local cats = vape.Categories
-		if cats.Main and type(vape.Legit) == 'table' then return 'new' end
+		if cats.Main and type(vape.Modules) == 'table' then
+			if type(vape.Legit) == 'table' then return 'new' end
+			for _, mod in pairs(vape.Modules) do
+				if type(mod) == 'table' and type(mod.Bind) == 'table' and type(mod.SetVisible) == 'function' then return 'new' end
+			end
+		end
 		if cats.Movement or cats.Ghost or cats.Search then return 'rise' end
 		if cats.TopBar then return 'old' end
 		if type(vape.Legit) ~= 'table' then return 'wurst' end
@@ -218,6 +224,27 @@ return function(ctx)
 		end
 		local mod = host:CreateModule(data)
 		if type(mod) ~= 'table' then error('Vape did not return a module', 0) end
+		local makers = {
+			'CreateToggle', 'CreateSlider', 'CreateTwoSlider', 'CreateDropdown', 'CreateMultiDropdown',
+			'CreateTextBox', 'CreateTextList', 'CreateBind', 'CreateColorSlider', 'CreateFont', 'CreateTargets'
+		}
+		for _, key in ipairs(makers) do
+			local name = key
+			local old = mod[name]
+			if type(old) == 'function' then
+				mod[name] = function(self, spec)
+					local opt = old(self, spec)
+					for optname, obj in pairs(self.Options or {}) do
+						if type(obj) == 'table' then api.optioninfo[obj] = {mod = self, name = optname} end
+					end
+					if name == 'CreateDropdown' and type(opt) == 'table' and spec and spec.Default ~= nil
+						and opt.Value ~= spec.Default and type(opt.SetValue) == 'function' then
+						pcall(opt.SetValue, opt, spec.Default)
+					end
+					return opt
+				end
+			end
+		end
 		self:add(data.Name, cat, mod)
 		return mod
 	end
@@ -243,7 +270,12 @@ return function(ctx)
 		walls = 'Walls',
 		opacity = 'Opacity',
 		blacklist = 'Blacklist',
-		special = 'Special'
+		special = 'Special',
+		suffix = 'Suffix',
+		hold = 'Hold',
+		cover = 'Cover',
+		module = 'Module',
+		noremove = 'NoRemove'
 	}
 
 	function api:spec(data)
@@ -272,7 +304,8 @@ return function(ctx)
 		hsv = 'CreateColorSlider',
 		font = 'CreateFont',
 		targets = 'CreateTargets',
-		targetfilters = 'CreateTargets'
+		targetfilters = 'CreateTargets',
+		bind = 'CreateBind'
 	}
 
 	function api:optionkeys(kind, data)
@@ -294,62 +327,75 @@ return function(ctx)
 		return opt
 	end
 
+	local probes = {
+		'Toggle', 'SetValue', 'Change', 'ChangeValue', 'SetBind', 'SetVisible',
+		'Load', 'Save', 'Color', 'Destroy', 'CreateMobileButton', 'DestroyMobileButton'
+	}
+
+	local function rawmethod(obj, key)
+		local fn = type(obj) == 'table' and obj[key]
+		if ctx.config and type(ctx.config.unwrapped) == 'function' then
+			fn = ctx.config:unwrapped(obj, key, fn)
+		end
+		if ctx.patchsys and type(ctx.patchsys.original) == 'function' then
+			fn = ctx.patchsys:original(obj, key, fn)
+		end
+		return fn
+	end
+
 	local function getups(fn)
-		local getter = debug and debug.getupvalues or getupvalues
-		if type(getter) == 'function' then
-			local ok, vals = pcall(getter, fn)
+		local get = debug and debug.getupvalues or getupvalues
+		if type(get) == 'function' then
+			local ok, vals = pcall(get, fn)
 			if ok and type(vals) == 'table' then return vals end
 		end
-		local one = debug and debug.getupvalue or getupvalue
-		if type(one) ~= 'function' then return {} end
+		get = debug and debug.getupvalue or getupvalue
+		if type(get) ~= 'function' then return {} end
 		local vals = {}
-		for i = 1, 40 do
-			local out = table.pack(pcall(one, fn, i))
+		for i = 1, 64 do
+			local out = table.pack(pcall(get, fn, i))
 			if not out[1] or out[2] == nil then break end
 			vals[#vals + 1] = out.n >= 3 and out[3] or out[2]
 		end
 		return vals
 	end
 
-	function api:settings(mod)
-		local cached = self.settingscache[mod]
-		local methods = {'Toggle', 'SetValue', 'SetBind', 'ChangeValue', 'Change'}
-		local info = self.optioninfo[mod]
-		local wanted = info and info.name or mod.Name
-		local base = {}
-		for _, key in ipairs(methods) do
-			local method = mod[key]
-			if ctx.config and type(ctx.config.unwrapped) == 'function' then
-				method = ctx.config:unwrapped(mod, key, method)
-			end
-			if ctx.patchsys and type(ctx.patchsys.original) == 'function' then
-				method = ctx.patchsys:original(mod, key, method)
-			end
-			base[key] = method
-		end
-		if type(cached) == 'table' and type(cached.value) == 'table' and cached.value.Name == wanted then
-			local valid = true
-			for _, key in ipairs(methods) do
-				if cached.methods[key] ~= base[key] then valid = false break end
-			end
-			if valid then return cached.value end
-		end
-		local found
-		for _, key in ipairs(methods) do
-			local method = base[key]
-			if type(method) == 'function' then
-				for _, val in pairs(getups(method)) do
-					if type(val) == 'table' and val ~= mod and val.Name == wanted
-						and (type(val.Function) == 'function' or val.Tooltip ~= nil or val.Default ~= nil) then
-						found = val
-						break
+	local function ismodule(obj)
+		return type(obj) == 'table' and type(obj.Options) == 'table'
+			and type(obj.Toggle) == 'function' and type(obj.Name) == 'string'
+	end
+
+	local function propok(val, name)
+		if type(val) ~= 'table' or val.Name ~= name then return false end
+		return val.Function ~= nil or val.Tooltip ~= nil or val.List ~= nil or val.Default ~= nil
+			or val.Min ~= nil or val.Max ~= nil or val.Visible ~= nil or val.Darker ~= nil
+			or val.Players ~= nil or val.NPCs ~= nil or val.Module ~= nil or val.Cover ~= nil
+	end
+
+	function api:props(obj)
+		if type(obj) ~= 'table' then return nil end
+		local info = self.optioninfo[obj]
+		local name = info and info.name or obj.Name
+		if type(name) ~= 'string' then return nil end
+		local cached = self.propcache[obj]
+		if type(cached) == 'table' and propok(cached, name) then return cached end
+		for _, key in ipairs(probes) do
+			local fn = rawmethod(obj, key)
+			if type(fn) == 'function' then
+				for _, val in pairs(getups(fn)) do
+					if propok(val, name) then
+						self.propcache[obj] = val
+						self.settingscache[obj] = {value = val}
+						return val
 					end
 				end
-				if found then break end
 			end
 		end
-		if found then self.settingscache[mod] = {value = found, methods = base} end
-		return found
+		return nil
+	end
+
+	function api:settings(obj)
+		return self:props(obj)
 	end
 
 	function api:snapshotoption(opt)
@@ -360,8 +406,8 @@ return function(ctx)
 		local info = self.optioninfo[opt]
 		local val = info and out[info.name]
 		if val == nil then
-			local key, single = next(out)
-			if key ~= nil and next(out, key) == nil then val = single end
+			local key, one = next(out)
+			if key ~= nil and next(out, key) == nil then val = one end
 		end
 		return val, true
 	end
@@ -373,25 +419,76 @@ return function(ctx)
 		return ok
 	end
 
-	function api:getprop(obj, prop)
-		if type(obj) ~= 'table' or type(prop) ~= 'string' then return false end
-		if prop == '@value' then
-			local val, ok = self:snapshotoption(obj)
-			return ok and type(val) == 'table', val
-		end
-		if prop == 'Function' or prop == 'Tooltip' then
-			local set = self:settings(obj)
-			if set then return true, set[prop] end
-			if rawget(obj, prop) == nil then return false end
-		end
-		return true, obj[prop]
+	function api:getlist(opt)
+		if type(opt) ~= 'table' then return nil, false end
+		local set = self:props(opt)
+		local list = set and set.List or rawget(opt, 'List')
+		if type(list) ~= 'table' then return nil, false end
+		return table.clone(list), true
 	end
 
-	local function replace(text, old, new)
-		if type(text) ~= 'string' or type(old) ~= 'string' or old == '' then return text end
-		local first, last = text:find(old, 1, true)
-		if not first then return text end
-		return text:sub(1, first - 1)..tostring(new or '')..text:sub(last + 1)
+	function api:setlist(opt, list)
+		if type(opt) ~= 'table' or type(list) ~= 'table' then return false end
+		local vals = table.clone(list)
+		local fn = rawmethod(opt, 'Change')
+		local ok = false
+		if type(fn) == 'function' then
+			ok = pcall(fn, opt, vals)
+		else
+			local set = self:props(opt)
+			if set and type(set.List) == 'table' then
+				set.List = vals
+				ok = true
+			end
+		end
+		if not ok then return false end
+		local got, good = self:getlist(opt)
+		if not good or #got ~= #vals then return false end
+		for i, val in ipairs(vals) do
+			if got[i] ~= val then return false end
+		end
+		return true
+	end
+
+	function api:getvisible(obj)
+		if type(obj) ~= 'table' then return nil, false end
+		local gui = obj.Object
+		if ismodule(obj) then
+			if self.object and self.object.EditGUI ~= true and typeof and typeof(gui) == 'Instance' then
+				local ok, val = pcall(function() return gui.Visible end)
+				if ok then return val, true end
+			end
+			if type(obj.Visible) == 'boolean' then return obj.Visible, true end
+		end
+		if typeof and typeof(gui) == 'Instance' then
+			local ok, val = pcall(function() return gui.Visible end)
+			if ok then return val, true end
+		end
+		local set = self:props(obj)
+		if set and type(set.Visible) == 'boolean' then return set.Visible, true end
+		return nil, false
+	end
+
+	function api:setvisible(obj, val)
+		if type(obj) ~= 'table' then return false end
+		val = val == true
+		local gui = obj.Object
+		if ismodule(obj) and type(obj.SetVisible) == 'function' then
+			local ok = pcall(obj.SetVisible, obj, val, true)
+			local got = self:getvisible(obj)
+			if ok and got == val then return true end
+			pcall(obj.SetVisible, obj, val, false)
+			got = self:getvisible(obj)
+			if got == val then return true end
+		end
+		if typeof and typeof(gui) == 'Instance' then
+			local ok = pcall(function() gui.Visible = val end)
+			if not ok then return false end
+			local set = self:props(obj)
+			if set then set.Visible = val end
+			return true
+		end
+		return false
 	end
 
 	local function setuptext(fn, old, new)
@@ -399,79 +496,149 @@ return function(ctx)
 		local set = debug and debug.setupvalue or setupvalue
 		if type(get) ~= 'function' or type(set) ~= 'function' or type(fn) ~= 'function' then return false end
 		local changed = false
-		for i = 1, 40 do
+		for i = 1, 64 do
 			local out = table.pack(pcall(get, fn, i))
 			if not out[1] or out[2] == nil then break end
-			local current = out.n >= 3 and out[3] or out[2]
-			if current == old then
-				local setok = pcall(set, fn, i, new)
-				changed = setok or changed
-			end
+			local cur = out.n >= 3 and out[3] or out[2]
+			if cur == old then changed = pcall(set, fn, i, new) or changed end
 		end
 		return changed
 	end
 
-	function api:settooltip(mod, old, new)
-		if type(old) ~= 'string' or type(new) ~= 'string' then return false end
-		local object = mod.Object
-		if not typeof or typeof(object) ~= 'Instance' then return false end
+	function api:settooltip(obj, old, new)
+		if new ~= nil and type(new) ~= 'string' then return false end
+		local set = self:props(obj)
+		local shown = old
+		local text = new
+		if set then
+			shown = shown or set.Tooltip or set.Name
+			set.Tooltip = new
+			text = text or set.Name
+		end
+		text = text or ''
+		local gui = obj.Object
 		if self.flavor == 'new' or self.flavor == 'old' then
-			if type(getconnections) ~= 'function' then return false end
-			local eventok, event = pcall(function() return object.MouseEnter end)
-			if not eventok then return false end
+			if type(getconnections) ~= 'function' or not (typeof and typeof(gui) == 'Instance') then
+				return set ~= nil
+			end
+			local ok, event = pcall(function() return gui.MouseEnter end)
+			if not ok then return set ~= nil end
 			local got, cons = pcall(getconnections, event)
-			if not got or type(cons) ~= 'table' then return false end
+			if not got or type(cons) ~= 'table' then return set ~= nil end
 			local changed = false
 			for _, con in pairs(cons) do
-				local readok, fn = pcall(function() return con.Function end)
-				if readok then changed = setuptext(fn, old, new) or changed end
+				local ok2, fn = pcall(function() return con.Function end)
+				if ok2 and type(shown) == 'string' then changed = setuptext(fn, shown, text) or changed end
 			end
-			return changed
+			return changed or set ~= nil
 		end
-		if self.flavor == 'rise' then
-			local got, children = pcall(object.GetChildren, object)
-			if not got then return false end
-			for _, item in ipairs(children) do
-				local readok, name, text = pcall(function() return item.Name, item.Text end)
-				if readok and name ~= 'Title' and text == old then
-					return pcall(function() item.Text = new end)
+		if self.flavor == 'rise' and typeof and typeof(gui) == 'Instance' then
+			local got, children = pcall(gui.GetChildren, gui)
+			if got then
+				for _, item in ipairs(children) do
+					local ok2, name, text = pcall(function() return item.Name, item.Text end)
+					if ok2 and name ~= 'Title' and text == shown then
+						pcall(function() item.Text = text end)
+						return true
+					end
 				end
 			end
-			return false
 		end
-		if self.flavor == 'wurst' and typeof(mod.Children) == 'Instance' then
-			local got, children = pcall(mod.Children.GetChildren, mod.Children)
-			if not got then return false end
-			local before = '\n\nDescription:\n'..old..'\n\nSettings:'
-			local after = '\n\nDescription:\n'..new..'\n\nSettings:'
-			for _, item in ipairs(children) do
-				local readok, text = pcall(function() return item.Text end)
-				if readok and type(text) == 'string' and text:find(before, 1, true) then
-					return pcall(function() item.Text = replace(text, before, after) end)
-				end
-			end
+		return set ~= nil
+	end
+
+	function api:getcallback(obj)
+		if type(obj) ~= 'table' then return nil, false end
+		local set = self:props(obj)
+		if set and type(set.Function) == 'function' then return set.Function, true end
+		local fn = rawget(obj, 'Function')
+		return fn, type(fn) == 'function'
+	end
+
+	function api:setcallback(obj, fn)
+		if type(obj) ~= 'table' or type(fn) ~= 'function' then return false end
+		local set = self:props(obj)
+		if set and set.Function ~= nil then
+			set.Function = fn
+			return true
+		end
+		if rawget(obj, 'Function') ~= nil then
+			obj.Function = fn
+			return true
 		end
 		return false
+	end
+
+	function api:getprop(obj, prop)
+		if type(obj) ~= 'table' or type(prop) ~= 'string' then return false end
+		if prop == '@value' then
+			local val, ok = self:snapshotoption(obj)
+			return ok, val
+		end
+		if prop == '@list' or prop == 'List' then
+			local val, ok = self:getlist(obj)
+			return ok, val
+		end
+		if prop == '@visible' or prop == 'Visible' then
+			local val, ok = self:getvisible(obj)
+			return ok, val
+		end
+		if prop == '@bind' then return true, self:savebind(obj) end
+		if prop == 'Function' then
+			local val, ok = self:getcallback(obj)
+			return ok, val
+		end
+		if prop == 'Tooltip' then
+			local set = self:props(obj)
+			if set then return true, set.Tooltip end
+			if rawget(obj, prop) == nil then return false end
+		end
+		return true, obj[prop]
 	end
 
 	function api:setprop(obj, prop, val)
 		if type(obj) ~= 'table' or type(prop) ~= 'string' then return false end
 		if prop == '@value' then return self:loadoption(obj, val) end
-		if prop == 'Function' or prop == 'Tooltip' then
-			local set = self:settings(obj)
-			if set then
-				local old = set[prop]
-				set[prop] = val
-				if prop == 'Tooltip' and not self:settooltip(obj, old, val) then
-					set[prop] = old
-					return false
-				end
-				return true
-			end
-			if rawget(obj, prop) == nil then return false end
+		if prop == '@list' or prop == 'List' then return self:setlist(obj, val) end
+		if prop == '@visible' or prop == 'Visible' then return self:setvisible(obj, val) end
+		if prop == '@bind' then return self:setbind(obj, val) end
+		if prop == 'Function' then return self:setcallback(obj, val) end
+		if prop == 'Tooltip' then
+			local set = self:props(obj)
+			local old = set and set.Tooltip or rawget(obj, prop)
+			if not self:settooltip(obj, old, val) then return false end
+			if not set and rawget(obj, prop) ~= nil then obj[prop] = val end
+			return true
 		end
 		obj[prop] = val
 		return true
+	end
+
+	function api:capabilities()
+		local out = {
+			flavor = self.flavor,
+			callbacks = false,
+			lists = false,
+			visibility = false,
+			binding = false
+		}
+		local mod = self:find('Reach', 'combat')
+		if not mod then
+			local _, val = next(self.index)
+			mod = val
+		end
+		if type(mod) == 'table' then
+			local _, ok = self:getcallback(mod)
+			out.callbacks = ok
+			local _, vis = self:getvisible(mod)
+			out.visibility = vis
+			out.binding = type(mod.Bind) == 'table' and type(mod.Bind.SetBind) == 'function'
+			for _, opt in pairs(mod.Options or {}) do
+				local _, list = self:getlist(opt)
+				if list then out.lists = true break end
+			end
+		end
+		return out
 	end
 
 	function api:remove(name, mod)
@@ -485,7 +652,7 @@ return function(ctx)
 			end
 		end
 		local bind = mod.Bind
-		local button = type(bind) == 'table' and bind.Button or typeof and typeof(bind) == 'Instance' and bind
+		local button = type(bind) == 'table' and (bind.Button or bind.Object) or typeof and typeof(bind) == 'Instance' and bind
 		if typeof and typeof(button) == 'Instance' then
 			local ok, msg = pcall(button.Destroy, button)
 			if not ok then complete = false ctx.log:add('module_cleanup', name, msg) end
@@ -503,6 +670,10 @@ return function(ctx)
 
 		live = self:liveslot(name)
 		if not removed or live == mod then
+			if type(mod.Destroy) == 'function' then
+				local ok, msg = pcall(mod.Destroy, mod)
+				if not ok then complete = false ctx.log:add('module_cleanup', name, msg) end
+			end
 			for _, con in pairs(mod.Connections or {}) do
 				local ok, done = pcall(function()
 					if type(con) == 'function' then con()
@@ -544,6 +715,15 @@ return function(ctx)
 	function api:removeoption(mod, name, opt)
 		if type(mod) ~= 'table' or type(opt) ~= 'table' then return false end
 		local complete = true
+		if type(opt.Bind) == 'table' and type(opt.Bind.Destroy) == 'function' then
+			local ok = pcall(opt.Bind.Destroy, opt.Bind)
+			if not ok then complete = false end
+			opt.Bind = nil
+		end
+		if opt.Type == 'Bind' and type(opt.Destroy) == 'function' then
+			local ok = pcall(opt.Destroy, opt)
+			if not ok then complete = false end
+		end
 		if opt.Type == 'Toggle' and opt.Enabled and type(opt.Toggle) == 'function' then
 			local ok = pcall(opt.Toggle, opt)
 			if not ok or opt.Enabled then complete = false end
@@ -617,37 +797,40 @@ return function(ctx)
 		return name
 	end
 
-	function api:setbind(mod, data)
-		local bind = type(mod) == 'table' and mod.Bind
-		if type(bind) == 'table' and type(bind.SetBind) == 'function' then
-			local keys = data
-			if type(data) == 'table' and (data.Keys ~= nil or data.keys ~= nil or data.Hold ~= nil or data.hold ~= nil
-				or data.Mobile ~= nil or data.mobile ~= nil) then
-				keys = data.Keys or data.keys or {}
-				bind.Hold = data.Hold == true or data.hold == true
-				local mobile = data.Mobile or data.mobile
-				if type(bind.DestroyMobileButton) == 'function' then bind:DestroyMobileButton() end
-				if type(mobile) == 'table' and type(bind.CreateMobileButton) == 'function' then
-					local x = tonumber(mobile.X or mobile.x)
-					local y = tonumber(mobile.Y or mobile.y)
-					if x and y then bind:CreateMobileButton(Vector2.new(x, y)) end
-				end
-			end
-			if type(keys) ~= 'table' then
-				if keys == nil or keys == '' then keys = {} else keys = {tostring(keys)} end
-			end
-			bind:SetBind(keys)
-			return true
-		end
-		if type(mod) ~= 'table' or type(mod.SetBind) ~= 'function' then return false end
-		if self.flavor == 'wurst' and type(data) == 'table' then data = data[1] or '' end
-		mod:SetBind(data)
-		return true
+	local function getbind(obj)
+		if type(obj) ~= 'table' then return nil end
+		if obj.Type == 'Bind' and type(obj.SetBind) == 'function' then return obj end
+		if type(obj.Bind) == 'table' and type(obj.Bind.SetBind) == 'function' then return obj.Bind end
+		if type(obj.SetBind) == 'function' then return obj end
 	end
 
-	function api:savebind(mod)
-		local bind = type(mod) == 'table' and mod.Bind
-		if type(bind) == 'table' and type(bind.Keys) == 'table' then
+	function api:setbind(obj, data)
+		local bind = getbind(obj)
+		if not bind then return false end
+		local keys = data
+		if type(data) == 'table' and (data.Keys ~= nil or data.keys ~= nil or data.Hold ~= nil or data.hold ~= nil
+			or data.Mobile ~= nil or data.mobile ~= nil) then
+			keys = data.Keys or data.keys or {}
+			if data.Hold ~= nil or data.hold ~= nil then bind.Hold = data.Hold == true or data.hold == true end
+			local mobile = data.Mobile or data.mobile
+			if type(bind.DestroyMobileButton) == 'function' then pcall(bind.DestroyMobileButton, bind) end
+			if type(mobile) == 'table' and type(bind.CreateMobileButton) == 'function' then
+				local x = tonumber(mobile.X or mobile.x)
+				local y = tonumber(mobile.Y or mobile.y)
+				if x and y then pcall(bind.CreateMobileButton, bind, Vector2.new(x, y)) end
+			end
+		end
+		if type(keys) ~= 'table' then
+			if keys == nil or keys == '' then keys = {} else keys = {tostring(keys)} end
+		end
+		local ok = pcall(bind.SetBind, bind, keys)
+		return ok
+	end
+
+	function api:savebind(obj)
+		local bind = getbind(obj)
+		if not bind then return nil end
+		if type(bind.Keys) == 'table' then
 			local out = {Keys = table.clone(bind.Keys), Hold = bind.Hold == true}
 			local mobile = bind.Mobile
 			if typeof and typeof(mobile) == 'Instance' then

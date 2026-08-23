@@ -57,6 +57,7 @@ return function(ctx)
 		if module and item.bind ~= nil and type(item.bind) ~= 'table' and type(item.bind) ~= 'string' then
 			return false
 		end
+		if module and item.visible ~= nil and type(item.visible) ~= 'boolean' then return false end
 		return true
 	end
 
@@ -96,9 +97,11 @@ return function(ctx)
 	local function moduledata(item)
 		local options, ok = moduleoptions(item.obj)
 		if not ok then return nil, false end
+		local visible = type(ctx.vapeapi.getvisible) == 'function' and select(1, ctx.vapeapi:getvisible(item.obj)) or nil
 		return {
 			category = item.category,
 			enabled = item.obj.Enabled == true,
+			visible = type(visible) == 'boolean' and visible or nil,
 			bind = clean(ctx.vapeapi:savebind(item.obj)),
 			options = options
 		}, true
@@ -121,6 +124,7 @@ return function(ctx)
 		if src.enabled ~= nil then dst.enabled = src.enabled end
 		if module and src.category ~= nil then dst.category = src.category end
 		if module and src.bind ~= nil then dst.bind = clean(src.bind) end
+		if module and src.visible ~= nil then dst.visible = src.visible == true end
 		if src.options ~= nil then dst.options = mergeoptions(dst.options, src.options) end
 		return dst
 	end
@@ -186,7 +190,7 @@ return function(ctx)
 		for name, item in pairs(ctx.mods) do
 			local current, ok = moduledata(item)
 			if not ok then return nil, false end
-			for _, field in ipairs({'category', 'enabled', 'bind'}) do
+			for _, field in ipairs({'category', 'enabled', 'visible', 'bind'}) do
 				if current[field] ~= nil and fieldowner(self, 'modules', name, field, item.scope) == scope then
 					record(data, 'modules', name)[field] = clean(current[field])
 				end
@@ -398,6 +402,10 @@ return function(ctx)
 			end
 			for name, saved in pairs(self.data.modules or {}) do
 				local item = ctx.mods[name]
+				if item and type(saved.visible) == 'boolean' and type(ctx.vapeapi.setvisible) == 'function' then
+					local shown, result = pcall(ctx.vapeapi.setvisible, ctx.vapeapi, item.obj, saved.visible)
+					if not shown or result == false then fail(name, shown and 'visibility restore returned false' or result) end
+				end
 				if item and saved.bind ~= nil then
 					local bound, result = pcall(ctx.vapeapi.setbind, ctx.vapeapi, item.obj, clean(saved.bind))
 					if not bound or result == false then fail(name, bound and 'bind restore returned false' or result) end
@@ -474,6 +482,7 @@ return function(ctx)
 	function config:watchmodule(item)
 		watchmethod(item.obj, 'Toggle')
 		watchmethod(item.obj, 'SetBind')
+		watchmethod(item.obj, 'SetVisible')
 		if type(item.obj.Bind) == 'table' then
 			local bind = item.obj.Bind
 			watchmethod(bind, 'SetBind')
