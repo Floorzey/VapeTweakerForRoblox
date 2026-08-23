@@ -234,7 +234,7 @@ return function(ctx)
 		lock += 1
 		local ok, ent = pcall(fn, {
 			Range = range and range.Value or 150,
-			Wallcheck = targets and targets.Walls and targets.Walls.Enabled and (walls or true) or nil,
+			Wallcheck = (not wall or wall.Enabled ~= true) and (walls or true) or nil,
 			Part = name,
 			Origin = origin,
 			Players = not targets or not targets.Players or targets.Players.Enabled ~= false,
@@ -435,7 +435,7 @@ return function(ctx)
 			chance = chance and chance.Value or 100,
 			head = part and part.Value == 'Head' and 100 or 0,
 			part = part and part.Value or 'Head',
-			walls = targets and targets.Walls and targets.Walls.Enabled == true,
+			walls = not wall or wall.Enabled ~= true,
 			players = not targets or not targets.Players or targets.Players.Enabled ~= false
 		}
 	end
@@ -577,7 +577,7 @@ return function(ctx)
 		Default = true,
 		Tooltip = 'Skips camera and camera-obstruction casts.'
 	})
-	wall = make('CreateToggle', {Name = 'Wallbang'})
+	wall = make('CreateToggle', {Name = 'Wallbang', Function = function() sig = nil reload() end})
 	range = make('CreateSlider', {
 		Name = 'Range',
 		Min = 1,

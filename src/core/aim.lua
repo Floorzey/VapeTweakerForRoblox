@@ -31,6 +31,10 @@ local rng = Random.new()
 local make = Ray.new
 local count = 0
 local busy = false
+local shot = 0
+local current
+local white = RaycastParams.new()
+white.FilterType = Enum.RaycastFilterType.Include
 local chan
 if type(get_comm_channel) == 'function' and type(id) == 'number' then
 	pcall(function() chan = get_comm_channel(id) end)
@@ -111,22 +115,22 @@ local function calc(origin, dir)
 	if kind == 'silent' then
 		local vec = hit.Position - origin
 		if vec.Magnitude <= 0.0001 then return origin, dir, false end
-		return origin, vec.Unit * dir.Magnitude, true
+		return origin, vec.Unit * dir.Magnitude, true, hit
 	end
 	local unit = dir.Unit
 	local vec = hit.CFrame:VectorToObjectSpace(unit)
 	local half = hit.Size * 0.5
 	local dist = math.abs(vec.X) * half.X + math.abs(vec.Y) * half.Y + math.abs(vec.Z) * half.Z
-	return hit.Position - unit * (dist + 0.05), dir, true
+	return hit.Position - unit * (dist + 0.05), dir, true, hit
 end
 local function ray(beam)
 	if typeof(beam) ~= 'Ray' then return beam, false end
-	local origin, dir, ok = calc(beam.Origin, beam.Direction)
+	local origin, dir, ok, hit = calc(beam.Origin, beam.Direction)
 	if not ok then return beam, false end
 	busy = true
 	local out = make(origin, dir)
 	busy = false
-	return out, true
+	return out, true, hit
 end
 if ars then
 	if type(getgc) == 'function' and type(islclosure) == 'function' and type(debug) == 'table' and type(debug.info) == 'function' and type(debug.getupvalues) == 'function' and type(debug.getconstants) == 'function' then
@@ -148,14 +152,49 @@ if ars then
 				if not nok or type(name) ~= 'string' or #name > 10 then continue end
 				add(fn, function(base, p1, p2)
 					if type(base) ~= 'function' then return end
+					local hit
 					if typeof(p1) == 'Ray' then
-						local out = ray(p1)
+						local out, ok, part = ray(p1)
 						p1 = out
+						if ok then hit = part end
+					end
+					if kind == 'magic' and not walls and hit then
+						local prev = current
+						current = hit
+						shot += 1
+						local res = table.pack(pcall(base, p1, p2))
+						shot -= 1
+						current = prev
+						if not res[1] then error(res[2], 0) end
+						return table.unpack(res, 2, res.n)
 					end
 					return base(p1, p2)
 				end)
 			end
 		end
+	end
+	if kind == 'magic' and not walls then
+		add(workspace.Raycast, function(base, self, origin, dir, params)
+			if type(base) ~= 'function' then return end
+			if shot > 0 and current and typeof(origin) == 'Vector3' and typeof(dir) == 'Vector3' then
+				white.FilterDescendantsInstances = {current}
+				pcall(function() white.CollisionGroup = current.CollisionGroup end)
+				return base(self, origin, dir, white)
+			end
+			return base(self, origin, dir, params)
+		end)
+		local function legacy(fn)
+			add(fn, function(base, self, beam, ...)
+				if type(base) ~= 'function' then return end
+				if shot > 0 and current and typeof(beam) == 'Ray' then
+					return current, current.Position, current:GetClosestPointOnSurface(beam.Origin), current.Material
+				end
+				return base(self, beam, ...)
+			end)
+		end
+		legacy(workspace.FindPartOnRay)
+		legacy(workspace.FindPartOnRayWithIgnoreList)
+		legacy(workspace.FindPartOnRayWithWhitelist)
 	end
 else
 	local ok, raw = add(Ray.new, function(base, origin, dir)
