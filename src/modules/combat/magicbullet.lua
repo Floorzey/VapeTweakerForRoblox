@@ -540,9 +540,9 @@ return function(ctx)
 	end
 
 	mod = ctx:module('combat', {
-		name = 'Magic Bullet',
+		name = 'MagicBullet',
 		autostart = false,
-		tooltip = 'Spoofs the weapon cast origin to just behind the selected target while preserving the original direction.',
+		tooltip = 'Spoofs the weapon cast origin',
 		extratext = function()
 			return active or method and method.Value or 'Raycast'
 		end,
