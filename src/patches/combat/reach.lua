@@ -26,7 +26,43 @@ return function(ctx)
 	local grips = {}
 	local tips = {}
 	local list = {'TouchInterest', 'Resize', 'HitboxQuery', 'GripOffset'}
+	local props
+	local oldlist
 
+	local function getprops()
+		if ctx.vapeapi and type(ctx.vapeapi.settings) == 'function' then
+			local ok, val = pcall(ctx.vapeapi.settings, ctx.vapeapi, mode)
+			if ok and type(val) == 'table' and type(val.List) == 'table' then return val end
+		end
+		local get = debug and debug.getupvalues or getupvalues
+		if type(get) ~= 'function' then return nil end
+		for _, fn in ipairs({mode.Change, mode.SetValue, mode.Load, mode.Save}) do
+			if type(fn) == 'function' then
+				local ok, vals = pcall(get, fn)
+				if ok and type(vals) == 'table' then
+					for _, val in pairs(vals) do
+						if type(val) == 'table' and val.Name == 'Mode' and type(val.List) == 'table' then return val end
+					end
+				end
+			end
+		end
+	end
+
+	local function setlist(vals)
+		if props and type(props.List) == 'table' then
+			table.clear(props.List)
+			for i, val in ipairs(vals) do props.List[i] = val end
+			return true
+		end
+		if type(mode.Change) == 'function' then
+			local ok = pcall(mode.Change, mode, vals)
+			return ok
+		end
+		return false
+	end
+
+	props = getprops()
+	if props and type(props.List) == 'table' then oldlist = table.clone(props.List) end
 
 	local function tooltip()
 		local gets = getconnections
@@ -227,7 +263,12 @@ return function(ctx)
 
 	mod.Function = fun
 	mode.SetValue = setfn
-	mode:Change(list)
+	if not setlist(list) then error('Reach mode list is unavailable', 0) end
+	if props and type(props.List) == 'table' then
+		for i, val in ipairs(list) do
+			if props.List[i] ~= val then error('Reach mode list update failed', 0) end
+		end
+	end
 	tooltip()
 	if chance and chance.Object then chance.Object.Visible = mode.Value == 'TouchInterest' end
 	ctx:clean(input.InputBegan:Connect(function(obj, gameproc)
@@ -240,7 +281,7 @@ return function(ctx)
 		if mode.SetValue == setfn then mode.SetValue = set end
 		for _, rec in ipairs(tips) do pcall(rec.set, rec.fn, rec.idx, rec.old) end
 		table.clear(tips)
-		pcall(mode.Change, mode, {'TouchInterest', 'Resize'})
+		setlist(oldlist or {'TouchInterest', 'Resize'})
 		if chance and chance.Object then chance.Object.Visible = mode.Value == 'TouchInterest' end
 	end)
 end
