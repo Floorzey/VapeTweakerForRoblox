@@ -320,6 +320,23 @@ return function(ctx)
 				local pos = cast(origin, dir)
 				if pos then args[1] = pos return true end
 			end
+		},
+		['Origin Scan'] = {
+			Hook = rc,
+			NoNamecall = true,
+			Args = function(args)
+				local origin, dir = args[1], args[2]
+				if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or guard(origin, dir) then return end
+				local ent, hit = target(origin)
+				if not ent or typeof(hit) ~= 'Instance' then return end
+				local pos
+				if ctx.origin and type(ctx.origin.line) == 'function' then
+					local ok, val = pcall(ctx.origin.line, ctx.origin, hit.Position, dir, hit)
+					if ok then pos = val end
+				end
+				pos = pos or spoof(hit, dir)
+				if pos then args[1] = pos return true end
+			end
 		}
 	}
 
@@ -520,13 +537,13 @@ return function(ctx)
 	end
 
 	local function notify(msg)
-		msg = tostring(msg or 'Magic Bullet could not be installed.')
+		msg = tostring(msg or 'MagicBullet could not be installed.')
 		local now = os.clock()
 		if msg == last and now - stamp < 30 then return end
 		last = msg
 		stamp = now
 		local vape = ctx.vapeapi and ctx.vapeapi.object
-		if type(vape) == 'table' and type(vape.CreateNotification) == 'function' then pcall(vape.CreateNotification, vape, 'Magic Bullet', msg, 6, 'warning') end
+		if type(vape) == 'table' and type(vape.CreateNotification) == 'function' then pcall(vape.CreateNotification, vape, 'MagicBullet', msg, 6, 'warning') end
 	end
 
 
@@ -571,7 +588,7 @@ return function(ctx)
 		if type(fn) ~= 'function' then return end
 		local ok, val = pcall(fn, mod, data)
 		if ok then return val end
-		ctx.log:add('module', 'Magic Bullet', val)
+		ctx.log:add('module', 'MagicBullet', val)
 	end
 
 	targets = make('CreateTargets', {Players = true})
@@ -581,7 +598,7 @@ return function(ctx)
 		Default = 'Mouse',
 		Function = paint
 	})
-	local methods = {'Raycast', 'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Ray'}
+	local methods = {'Raycast', 'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Ray', 'Origin Scan'}
 	if ctx.aim and ctx.aim.ars then table.insert(methods, 1, 'Arsenal') end
 	method = make('CreateDropdown', {
 		Name = 'Method',

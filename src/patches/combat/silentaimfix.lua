@@ -374,4 +374,79 @@ return function(ctx)
 		if type(val) == 'table' then done = patch:set('Function', wrap, val) else done = patch:set(name, wrap, hooks) end
 		if name == 'Ray' and not done then error('SilentAim Ray transform could not be patched', 0) end
 	end
+
+	local method = mod.Options and mod.Options.Method
+	local info = ctx.vape and ctx.vape.Libraries and ctx.vape.Libraries.targetinfo
+	local base = {'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Raycast', 'Ray'}
+
+	local function locate(origin, dir)
+		if type(lib) ~= 'table' or type(lib.List) ~= 'table' or typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or dir.Magnitude <= 0.001 then return end
+		local unit = dir.Unit
+		local best
+		local score = math.huge
+		local names = {'Head', 'RootPart'}
+		local hname = data()
+		if type(hname) == 'string' and not table.find(names, hname) then table.insert(names, 1, hname) end
+		local now = tick()
+		for _, ent in lib.List do
+			if not ent.Targetable then continue end
+			if type(lib.isVulnerable) == 'function' and not lib.isVulnerable(ent) then continue end
+			for _, name in names do
+				local part = ent[name]
+				if typeof(part) ~= 'Instance' or not part:IsA('BasePart') then continue end
+				local rel = part.Position - origin
+				local along = rel:Dot(unit)
+				if along < 0 or along > dir.Magnitude + 32 then continue end
+				local near = origin + unit * along
+				local dist = (part.Position - near).Magnitude
+				local live = type(info) == 'table' and type(info.Targets) == 'table' and tonumber(info.Targets[ent]) or 0
+				local val = dist - (live > now and 1000 or 0)
+				if val < score then
+					score = val
+					best = part
+				end
+			end
+		end
+		if best and score < 24 then return best end
+		if best and score < -900 then return best end
+	end
+
+	local busy = false
+	local function scan(args)
+		if busy or args[1] ~= workspace then return end
+		local origin, dir = args[2], args[3]
+		if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' then return end
+		if fix and fix.Enabled and bypass(origin, dir) then return end
+		busy = true
+		local vals = {origin, dir, args[4]}
+		local ok, out = pcall(hooks.Raycast.Function, vals)
+		if not ok then busy = false return end
+		if out then busy = false return out end
+		if typeof(vals[2]) ~= 'Vector3' or vals[2] == dir then busy = false return end
+		local part = locate(origin, vals[2])
+		local root = type(lib) == 'table' and lib.character and (lib.character.RootPart or lib.character.HumanoidRootPart)
+		local start = typeof(root) == 'Instance' and root.Position or origin
+		local pos
+		if part and ctx.origin and type(ctx.origin.scan) == 'function' then
+			local ok2, val = pcall(ctx.origin.scan, ctx.origin, start, part.Position, nil, part)
+			if ok2 then pos = val end
+		end
+		args[2] = pos or origin
+		args[3] = vals[2]
+		args[4] = vals[3]
+		busy = false
+	end
+
+	if type(method) == 'table' and type(method.Change) == 'function' and type(ctx.origin) == 'table' then
+		local val = {Hook = workspace.Raycast, Function = scan, NoNamecall = true}
+		if patch:set('Origin Scan', val, hooks) then
+			local list = table.clone(base)
+			list[#list + 1] = 'Origin Scan'
+			pcall(method.Change, method, list)
+			ctx:clean(function()
+				if method.Value == 'Origin Scan' and type(method.SetValue) == 'function' then pcall(method.SetValue, method, 'Raycast') end
+				pcall(method.Change, method, base)
+			end)
+		end
+	end
 end
