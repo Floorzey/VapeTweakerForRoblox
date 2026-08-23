@@ -153,6 +153,25 @@ return function(ctx)
 		return typeof(a) == 'Vector3' and typeof(b) == 'Vector3' and (a - b).Magnitude <= dist
 	end
 
+	local function close(origin)
+		if typeof(origin) ~= 'Vector3' then return false end
+		local cam = workspace.CurrentCamera
+		if cam and near(origin, cam.CFrame.Position, 64) then return true end
+		local plr = game:GetService('Players').LocalPlayer
+		local char = plr and plr.Character
+		if not char then return false end
+		local root = char:FindFirstChild('HumanoidRootPart')
+		local head = char:FindFirstChild('Head')
+		if root and near(origin, root.Position, 64) then return true end
+		if head and near(origin, head.Position, 64) then return true end
+		local tool = char:FindFirstChildWhichIsA('Tool')
+		if tool then
+			local handle = tool:FindFirstChild('Handle', true)
+			if handle and handle:IsA('BasePart') and near(origin, handle.Position, 64) then return true end
+		end
+		return false
+	end
+
 	local function subject(cam)
 		if not cam then return nil end
 		local sub = cam.CameraSubject
@@ -214,6 +233,16 @@ return function(ctx)
 			if to.Magnitude > 0.25 and unit:Dot(to.Unit) > 0.6 then return true end
 		end
 		return false
+	end
+
+	local function valid(origin, dir, unit)
+		if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' then return false end
+		local len = dir.Magnitude
+		if len <= 0.001 then return false end
+		if not unit and len < 12 then return false end
+		if not close(origin) then return false end
+		if guard(origin, dir) then return false end
+		return true
 	end
 
 	local function skip()
@@ -278,7 +307,7 @@ return function(ctx)
 			Hook = rc,
 			Args = function(args)
 				local origin, dir = args[1], args[2]
-				if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or guard(origin, dir) then return end
+				if not valid(origin, dir) then return end
 				local pos, hit = cast(origin, dir)
 				if not pos then return end
 				args[1] = pos
@@ -294,7 +323,7 @@ return function(ctx)
 			Hook = fi,
 			Args = function(args)
 				local beam = args[1]
-				if typeof(beam) ~= 'Ray' or guard(beam.Origin, beam.Direction) then return end
+				if typeof(beam) ~= 'Ray' or not valid(beam.Origin, beam.Direction) then return end
 				local pos, hit = cast(beam.Origin, beam.Direction, {args[2]})
 				if not pos then return end
 				args[1] = new(pos, beam.Direction)
@@ -305,7 +334,7 @@ return function(ctx)
 		ScreenPointToRay = {
 			Hook = sr,
 			Result = function(beam)
-				if typeof(beam) ~= 'Ray' or guard(beam.Origin, beam.Direction) then return end
+				if typeof(beam) ~= 'Ray' or not valid(beam.Origin, beam.Direction, true) then return end
 				local pos = cast(beam.Origin, beam.Direction)
 				if pos then return new(pos, beam.Direction) end
 			end
@@ -316,7 +345,7 @@ return function(ctx)
 			NoSelf = true,
 			Args = function(args)
 				local origin, dir = args[1], args[2]
-				if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or guard(origin, dir) then return end
+				if not valid(origin, dir) then return end
 				local pos = cast(origin, dir)
 				if pos then args[1] = pos return true end
 			end
@@ -326,7 +355,7 @@ return function(ctx)
 			NoNamecall = true,
 			Args = function(args)
 				local origin, dir = args[1], args[2]
-				if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or guard(origin, dir) then return end
+				if not valid(origin, dir) then return end
 				local ent, hit = target(origin)
 				if not ent or typeof(hit) ~= 'Instance' then return end
 				local pos
@@ -418,7 +447,119 @@ return function(ctx)
 		sig = nil
 	end
 
-	local function direct(name, data, use)
+	local direct
+
+	local function bind(fn, wrap, use)
+		if orig or type(fn) ~= 'function' or type(wrap) ~= 'function' then return false end
+		bound = fn
+		if use and oth and type(oth.hook) == 'function' then
+			local ok = pcall(function() orig = oth.hook(fn, wrap) end)
+			if ok and type(orig) == 'function' then foth = true return true end
+			orig = nil
+		end
+		if type(hookfunction) ~= 'function' then bound = nil return false end
+		local ok = pcall(function() orig = hookfunction(fn, wrap) end)
+		if not ok or type(orig) ~= 'function' then orig = nil bound = nil return false end
+		return true
+	end
+
+	local function prison(fn, use)
+		local function fire(...)
+			if not mod.Enabled or skip() then return orig(...) end
+			local args = table.pack(...)
+			local origin, aim = args[1], args[2]
+			if typeof(origin) ~= 'Vector3' or typeof(aim) ~= 'Vector3' then return orig(...) end
+			local dir = aim - origin
+			if not valid(origin, dir) then return orig(...) end
+			local ent, hit = target(origin)
+			if not ent or typeof(hit) ~= 'Instance' then return orig(...) end
+			local pos
+			if ctx.origin and type(ctx.origin.line) == 'function' then
+				local ok, val = pcall(ctx.origin.line, ctx.origin, hit.Position, dir, hit)
+				if ok then pos = val end
+			end
+			pos = pos or spoof(hit, dir)
+			if not pos then return orig(...) end
+			local move = pos - origin
+			args[1] = pos
+			args[2] = aim + move
+			local get = debug and debug.getstack or getstack
+			local set = debug and debug.setstack or setstack
+			if type(get) == 'function' and type(set) == 'function' then
+				local ok, stack = pcall(get, 3)
+				if ok and type(stack) == 'table' then
+					for index, val in pairs(stack) do
+						if val == origin then pcall(set, 3, index, pos) end
+					end
+				end
+			end
+			active = 'Origin Scan PrisonLife'
+			return orig(table.unpack(args, 1, args.n))
+		end
+		return bind(fn, function(...) return fire(...) end, use)
+	end
+
+	local function jail(fn, use)
+		local function wrap(...)
+			if not mod.Enabled or skip() then return orig(...) end
+			local args = table.pack(...)
+			local item = args[1]
+			if type(item) ~= 'table' or item.Local ~= true then return orig(...) end
+			local tip = item.Tip
+			if typeof(tip) ~= 'Instance' then return orig(...) end
+			local ok, cf = pcall(function() return tip.CFrame end)
+			if not ok or typeof(cf) ~= 'CFrame' then return orig(...) end
+			local origin = cf.Position
+			if not close(origin) then return orig(...) end
+			local dir = item.TipDirection
+			if typeof(dir) ~= 'Vector3' or dir.Magnitude <= 0.001 then dir = cf.LookVector end
+			if typeof(dir) ~= 'Vector3' or dir.Magnitude <= 0.001 then return orig(...) end
+			local ent, hit = target(origin)
+			if not ent or typeof(hit) ~= 'Instance' then return orig(...) end
+			local pos
+			if ctx.origin and type(ctx.origin.line) == 'function' then
+				local ok2, val = pcall(ctx.origin.line, ctx.origin, hit.Position, dir, hit)
+				if ok2 then pos = val end
+			end
+			pos = pos or spoof(hit, dir)
+			if not pos then return orig(...) end
+			local oldcf = cf
+			local ok2 = pcall(function() tip.CFrame = CFrame.lookAt(pos, pos + dir.Unit) end)
+			if not ok2 then return orig(...) end
+			local out = table.pack(pcall(orig, table.unpack(args, 1, args.n)))
+			pcall(function() tip.CFrame = oldcf end)
+			if not out[1] then error(out[2], 0) end
+			active = 'Origin Scan Jailbreak'
+			return table.unpack(out, 2, out.n)
+		end
+		return bind(fn, wrap, use)
+	end
+
+	local function scan()
+		local kind, fn, extra
+		if ctx.weapon then kind, fn, extra = ctx.weapon:resolve() else kind = 'generic' end
+		local use = hook and hook.Value == 'Oth hook'
+		if kind == 'prison' then
+			if prison(fn, use) then active = 'Origin Scan PrisonLife' return true end
+			err = 'Prison Life weapon hook could not be installed.'
+			return false
+		end
+		if kind == 'jail' then
+			if jail(fn, use) then active = 'Origin Scan Jailbreak' return true end
+			err = 'Jailbreak weapon hook could not be installed.'
+			return false
+		end
+		if kind == nil then
+			err = extra or 'The weapon adapter could not be resolved.'
+			return false
+		end
+		local data = hooks['Origin Scan']
+		if direct('Origin Scan', data, use) then active = 'Origin Scan' return true end
+		err = 'The generic Origin Scan hook could not be installed.'
+		return false
+	end
+
+	direct = function(name, data, use)
 		if orig or type(data) ~= 'table' or type(data.Hook) ~= 'function' then return false end
 		bound = data.Hook
 		local wrap
@@ -512,6 +653,7 @@ return function(ctx)
 		err = nil
 		local name = method and method.Value or 'Raycast'
 		if name == 'Arsenal' then return arsenal() end
+		if name == 'Origin Scan' then return scan() end
 		local kind = hook and hook.Value or 'Hookmetamethod'
 		local data = hooks[name]
 		if not data then
