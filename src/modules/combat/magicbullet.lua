@@ -2,7 +2,6 @@ return function(ctx)
 	local mod
 	local targets
 	local mode
-	local adapter
 	local method
 	local hook
 	local ignored
@@ -24,10 +23,7 @@ return function(ctx)
 	local white = RaycastParams.new()
 	white.FilterType = Enum.RaycastFilterType.Include
 	local old
-	local orig
-	local bound
-	local moth = false
-	local foth = false
+	local list = {}
 	local lock = 0
 	local silent
 	local resume = false
@@ -35,15 +31,17 @@ return function(ctx)
 	local err
 	local last
 	local stamp = 0
-	local stash = {}
-	local new = Ray.new
+	local sig
+	local clock = 0
+	local raw = Ray.new
+	local make = raw
 	local rc = workspace.Raycast
 	local fr = workspace.FindPartOnRay
 	local fi = workspace.FindPartOnRayWithIgnoreList
 	local fw = workspace.FindPartOnRayWithWhitelist
 	local sr = Instance.new('Camera').ScreenPointToRay
 	local vr = Instance.new('Camera').ViewportPointToRay
-	local cameras = {
+	local cams = {
 		basecamera = true,
 		camerainput = true,
 		cameramodule = true,
@@ -68,7 +66,7 @@ return function(ctx)
 		vrcamera = true,
 		zoomcontroller = true
 	}
-	local tokens = {
+	local words = {
 		'camera',
 		'camcontroller',
 		'clicktomove',
@@ -140,9 +138,9 @@ return function(ctx)
 		for _ = 1, 20 do
 			if not cur or cur == game then break end
 			local text = tostring(cur.Name or ''):lower()
-			if cameras[text] then return true end
-			for _, token in ipairs(tokens) do
-				if text:find(token, 1, true) then return true end
+			if cams[text] then return true end
+			for _, word in ipairs(words) do
+				if text:find(word, 1, true) then return true end
 			end
 			cur = cur.Parent
 		end
@@ -273,231 +271,68 @@ return function(ctx)
 		return pos, hit
 	end
 
-	local hooks = {
-		Raycast = {
-			Hook = rc,
-			Args = function(args)
-				local origin, dir = args[1], args[2]
-				if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or guard(origin, dir) then return end
-				local pos, hit = cast(origin, dir)
-				if not pos then return end
-				args[1] = pos
-				if wall and wall.Enabled and hit then
-					white.FilterDescendantsInstances = {hit}
-					pcall(function() white.CollisionGroup = hit.CollisionGroup end)
-					args[3] = white
-				end
-				return true
-			end
-		},
-		FindPartOnRayWithIgnoreList = {
-			Hook = fi,
-			Args = function(args)
-				local beam = args[1]
-				if typeof(beam) ~= 'Ray' or guard(beam.Origin, beam.Direction) then return end
-				local pos, hit = cast(beam.Origin, beam.Direction, {args[2]})
-				if not pos then return end
-				args[1] = new(pos, beam.Direction)
-				if wall and wall.Enabled and hit then return true, {hit, hit.Position, hit:GetClosestPointOnSurface(beam.Origin), hit.Material} end
-				return true
-			end
-		},
-		ScreenPointToRay = {
-			Hook = sr,
-			Result = function(beam)
-				if typeof(beam) ~= 'Ray' or guard(beam.Origin, beam.Direction) then return end
-				local pos = cast(beam.Origin, beam.Direction)
-				if pos then return new(pos, beam.Direction) end
-			end
-		},
-		Ray = {
-			Hook = new,
-			NoNamecall = true,
-			NoSelf = true,
-			Args = function(args)
-				local origin, dir = args[1], args[2]
-				if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or guard(origin, dir) then return end
-				local pos = cast(origin, dir)
-				if pos then args[1] = pos return true end
-			end
-		}
-	}
-
-	for _, name in ipairs({'FindPartOnRay', 'FindPartOnRayWithWhitelist'}) do
-		hooks[name] = table.clone(hooks.FindPartOnRayWithIgnoreList)
-		hooks[name].Hook = workspace[name]
-	end
-	hooks.ViewportPointToRay = table.clone(hooks.ScreenPointToRay)
-	hooks.ViewportPointToRay.Hook = vr
-
-	local function apply(data, args)
-		if type(data.Args) ~= 'function' then return false end
-		lock += 1
-		local out = table.pack(pcall(data.Args, args))
-		lock -= 1
-		if not out[1] then return false end
-		return out[2] == true, out[3]
+	local function ray(beam, walls)
+		if typeof(beam) ~= 'Ray' or guard(beam.Origin, beam.Direction) then return beam, false end
+		local pos, hit = cast(beam.Origin, beam.Direction, walls)
+		if not pos then return beam, false end
+		return make(pos, beam.Direction), true, hit
 	end
 
-	local function result(data, val)
-		if type(data.Result) ~= 'function' then return val, false end
-		lock += 1
-		local ok, out = pcall(data.Result, val)
-		lock -= 1
-		if ok and out ~= nil then return out, true end
-		return val, false
-	end
-
-	local function namecall(...)
-		if not mod.Enabled or skip() then return old(...) end
-		local ok, name = pcall(getnamecallmethod)
-		local want = method and method.Value or 'Raycast'
-		if not ok or name ~= want then return old(...) end
-		local data = hooks[name]
-		if not data or data.NoNamecall then return old(...) end
-		local self, args = ..., {select(2, ...)}
-		if data.Result then
-			local val = old(self, table.unpack(args))
-			local out, changed = result(data, val)
-			if changed then active = name end
-			return out
+	local function add(fn, cb, use)
+		if type(fn) ~= 'function' then return false end
+		local base
+		if use then
+			if not oth or type(oth.hook) ~= 'function' then return false end
+			local ok = pcall(function() base = oth.hook(fn, function(...) return cb(base, ...) end) end)
+			if not ok or type(base) ~= 'function' then return false end
+			list[#list + 1] = {fn, base, true}
+			return true, base
 		end
-		local changed, out = apply(data, args)
-		if changed then
-			active = name
-			if type(out) == 'table' then return table.unpack(out) end
-		end
-		return old(self, table.unpack(args))
+		if type(hookfunction) ~= 'function' then return false end
+		local ok = pcall(function() base = hookfunction(fn, function(...) return cb(base, ...) end) end)
+		if not ok or type(base) ~= 'function' then return false end
+		list[#list + 1] = {fn, base, false}
+		return true, base
 	end
 
 	local function restore()
-		for i = #stash, 1, -1 do
-			local item = stash[i]
-			if type(restorefunction) == 'function' then
-				pcall(restorefunction, item[1])
-			elseif type(hookfunction) == 'function' then
-				pcall(hookfunction, item[1], item[2])
-			end
-		end
-		table.clear(stash)
-	end
-
-	local function clear()
-		restore()
-		if orig and bound then
-			if foth and oth and type(oth.unhook) == 'function' then
-				pcall(oth.unhook, bound)
+		for i = #list, 1, -1 do
+			local val = list[i]
+			if val[3] and oth and type(oth.unhook) == 'function' then
+				pcall(oth.unhook, val[1])
 			elseif type(restorefunction) == 'function' then
-				pcall(restorefunction, bound)
+				pcall(restorefunction, val[1])
 			elseif type(hookfunction) == 'function' then
-				pcall(hookfunction, bound, orig)
+				pcall(hookfunction, val[1], val[2])
 			end
 		end
+		table.clear(list)
+		make = raw
 		if old then
-			if moth and oth and type(oth.unhook) == 'function' and type(getrawmetatable) == 'function' then
-				pcall(oth.unhook, getrawmetatable(game).__namecall)
+			if type(restorefunction) == 'function' and type(getrawmetatable) == 'function' then
+				pcall(restorefunction, getrawmetatable(game).__namecall)
 			elseif type(hookmetamethod) == 'function' then
 				pcall(hookmetamethod, game, '__namecall', old)
-			elseif type(restorefunction) == 'function' and type(getrawmetatable) == 'function' then
-				pcall(restorefunction, getrawmetatable(game).__namecall)
 			end
+			old = nil
 		end
-		old = nil
-		orig = nil
-		bound = nil
-		moth = false
-		foth = false
-		active = nil
-		lock = 0
 	end
 
-	local function direct(name, data, use)
-		if orig or type(data) ~= 'table' or type(data.Hook) ~= 'function' then return false end
-		bound = data.Hook
-		local wrap
-		wrap = function(...)
-			if not mod.Enabled or skip() then return orig(...) end
-			if data.NoSelf then
-				local args = {...}
-				local changed = apply(data, args)
-				if changed then active = name end
-				return orig(table.unpack(args))
-			end
-			local self, args = ..., {select(2, ...)}
-			if data.Result then
-				local val = orig(self, table.unpack(args))
-				local out, changed = result(data, val)
-				if changed then active = name end
-				return out
-			end
-			local changed, out = apply(data, args)
-			if changed then
-				active = name
-				if type(out) == 'table' then return table.unpack(out) end
-			end
-			return orig(self, table.unpack(args))
-		end
-		if use and oth and type(oth.hook) == 'function' then
-			local ok = pcall(function() orig = oth.hook(data.Hook, wrap) end)
-			if ok and type(orig) == 'function' then foth = true return true end
-			orig = nil
-		end
-		if type(hookfunction) ~= 'function' then bound = nil return false end
-		local ok = pcall(function() orig = hookfunction(data.Hook, wrap) end)
-		if not ok or type(orig) ~= 'function' then orig = nil bound = nil return false end
-		return true
-	end
-
-	local function attach(kind)
-		if old or type(getnamecallmethod) ~= 'function' then return false end
-		if kind == 'Oth hook' then
-			if not oth or type(oth.hook) ~= 'function' or type(getrawmetatable) ~= 'function' then return false end
-			local ok = pcall(function() old = oth.hook(getrawmetatable(game).__namecall, namecall) end)
-			if not ok or type(old) ~= 'function' then old = nil return false end
-			moth = true
-			return true
-		end
-		if type(hookmetamethod) ~= 'function' then return false end
-		local ok = pcall(function() old = hookmetamethod(game, '__namecall', namecall) end)
-		if not ok or type(old) ~= 'function' then old = nil return false end
-		return true
-	end
-
-	local function bind(name, fn, cb)
-		if type(fn) ~= 'function' or type(hookfunction) ~= 'function' then return false end
-		local base
-		local wrap = function(...)
-			return cb(base, ...)
-		end
-		local ok, val = pcall(hookfunction, fn, wrap)
-		if not ok or type(val) ~= 'function' then return false end
-		base = val
-		stash[#stash + 1] = {fn, val}
-		return true
-	end
-
-	local function arsenal()
-		if type(hookfunction) ~= 'function' then
-			err = 'hookfunction is unavailable on this executor.'
-			return false
-		end
+	local function direct(use)
 		local count = 0
-		local function mark(name)
-			active = 'Arsenal '..name
-		end
-		if bind('Ray', new, function(base, origin, dir)
-			if mod.Enabled and not skip() and typeof(origin) == 'Vector3' and typeof(dir) == 'Vector3' and not guard(origin, dir) then
-				local pos = cast(origin, dir)
-				if pos then origin = pos mark('Ray') end
-			end
+		local rok, rbase = add(raw, function(base, origin, dir)
+			if not mod.Enabled or skip() or guard(origin, dir) then return base(origin, dir) end
+			local pos = cast(origin, dir)
+			if pos then origin = pos active = 'Universal' end
 			return base(origin, dir)
-		end) then count += 1 end
-		if bind('Raycast', rc, function(base, self, origin, dir, params)
-			if mod.Enabled and not skip() and typeof(origin) == 'Vector3' and typeof(dir) == 'Vector3' and not guard(origin, dir) then
+		end, use)
+		if rok then count += 1 make = rbase or make end
+		if add(rc, function(base, self, origin, dir, params)
+			if mod.Enabled and not skip() and not guard(origin, dir) then
 				local pos, hit = cast(origin, dir)
 				if pos then
 					origin = pos
-					mark('Raycast')
+					active = 'Universal'
 					if wall and wall.Enabled and hit then
 						white.FilterDescendantsInstances = {hit}
 						pcall(function() white.CollisionGroup = hit.CollisionGroup end)
@@ -506,70 +341,155 @@ return function(ctx)
 				end
 			end
 			return base(self, origin, dir, params)
-		end) then count += 1 end
-		local function legacy(name, fn)
-			if bind(name, fn, function(base, self, beam, ...)
+		end, use) then count += 1 end
+		local function legacy(fn)
+			if add(fn, function(base, self, beam, ...)
 				local args = {...}
-				if mod.Enabled and not skip() and typeof(beam) == 'Ray' and not guard(beam.Origin, beam.Direction) then
-					local pos, hit = cast(beam.Origin, beam.Direction, {args[1]})
-					if pos then
-						mark(name)
+				if mod.Enabled and not skip() then
+					local out, changed, hit = ray(beam, {args[1]})
+					if changed then
+						active = 'Universal'
 						if wall and wall.Enabled and hit then return hit, hit.Position, hit:GetClosestPointOnSurface(beam.Origin), hit.Material end
-						beam = new(pos, beam.Direction)
+						beam = out
 					end
 				end
 				return base(self, beam, table.unpack(args))
-			end) then count += 1 end
+			end, use) then count += 1 end
 		end
-		legacy('FindPartOnRay', fr)
-		legacy('FindPartOnRayWithIgnoreList', fi)
-		legacy('FindPartOnRayWithWhitelist', fw)
-		local function camera(name, fn)
-			if bind(name, fn, function(base, self, ...)
+		legacy(fr)
+		legacy(fi)
+		legacy(fw)
+		local function camera(fn)
+			if add(fn, function(base, self, ...)
 				local beam = base(self, ...)
-				if mod.Enabled and not skip() and typeof(beam) == 'Ray' and not guard(beam.Origin, beam.Direction) then
-					local pos = cast(beam.Origin, beam.Direction)
-					if pos then beam = new(pos, beam.Direction) mark(name) end
+				if mod.Enabled and not skip() then
+					local out, changed = ray(beam)
+					if changed then active = 'Universal' beam = out end
 				end
 				return beam
-			end) then count += 1 end
+			end, use) then count += 1 end
 		end
-		camera('ScreenPointToRay', sr)
-		camera('ViewportPointToRay', vr)
-		if count == 0 then
-			err = 'Arsenal could not attach to any cast function.'
-			return false
+		camera(sr)
+		camera(vr)
+		return count > 0
+	end
+
+	local function namecall(...)
+		if not mod.Enabled or skip() then return old(...) end
+		local ok, name = pcall(getnamecallmethod)
+		if not ok then return old(...) end
+		local self, args = ..., {select(2, ...)}
+		if name == 'Raycast' then
+			local origin, dir = args[1], args[2]
+			if typeof(origin) == 'Vector3' and typeof(dir) == 'Vector3' and not guard(origin, dir) then
+				local pos, hit = cast(origin, dir)
+				if pos then
+					args[1] = pos
+					active = 'Universal'
+					if wall and wall.Enabled and hit then
+						white.FilterDescendantsInstances = {hit}
+						pcall(function() white.CollisionGroup = hit.CollisionGroup end)
+						args[3] = white
+					end
+				end
+			end
+			return old(self, table.unpack(args))
 		end
-		active = 'Arsenal'
-		return true
+		if name == 'FindPartOnRay' or name == 'FindPartOnRayWithIgnoreList' or name == 'FindPartOnRayWithWhitelist' then
+			local beam = args[1]
+			local out, changed, hit = ray(beam, {args[2]})
+			if changed then
+				active = 'Universal'
+				if wall and wall.Enabled and hit then return hit, hit.Position, hit:GetClosestPointOnSurface(beam.Origin), hit.Material end
+				args[1] = out
+			end
+			return old(self, table.unpack(args))
+		end
+		if name == 'ScreenPointToRay' or name == 'ViewportPointToRay' then
+			local beam = old(self, table.unpack(args))
+			local out, changed = ray(beam)
+			if changed then active = 'Universal' return out end
+			return beam
+		end
+		return old(...)
+	end
+
+	local function meta()
+		if type(hookmetamethod) ~= 'function' then return false end
+		local ok = pcall(function() old = hookmetamethod(game, '__namecall', namecall) end)
+		if not ok or type(old) ~= 'function' then old = nil return false end
+		local rayok, rbase = add(raw, function(base, origin, dir)
+			if not mod.Enabled or skip() or guard(origin, dir) then return base(origin, dir) end
+			local pos = cast(origin, dir)
+			if pos then origin = pos active = 'Universal' end
+			return base(origin, dir)
+		end, false)
+		if rayok then make = rbase or make end
+		return rayok or old ~= nil
+	end
+
+	local function cfg()
+		return {
+			mode = mode and mode.Value or 'Mouse',
+			range = range and range.Value or 150,
+			chance = chance and chance.Value or 100,
+			head = part and part.Value == 'Head' and 100 or 0,
+			part = part and part.Value or 'Head',
+			walls = targets and targets.Walls and targets.Walls.Enabled == true,
+			players = not targets or not targets.Players or targets.Players.Enabled ~= false
+		}
+	end
+
+	local function token()
+		local data = cfg()
+		return table.concat({
+			method and method.Value or 'Universal',
+			data.mode,
+			tostring(data.range),
+			tostring(data.chance),
+			data.part,
+			tostring(data.walls),
+			tostring(data.players)
+		}, '|')
+	end
+
+	local function actor()
+		if not ctx.aim then return false end
+		local ars = method and method.Value == 'Arsenal'
+		local ok, msg = ctx.aim:start('magic', 'magic', ars, cfg())
+		if not ok and ars then err = msg end
+		return ok
+	end
+
+	local function clear()
+		restore()
+		if ctx.aim then ctx.aim:stop('magic') end
+		active = nil
+		lock = 0
+		sig = nil
 	end
 
 	local function install()
 		clear()
 		err = nil
-		if adapter and adapter.Value == 'Arsenal' then return arsenal() end
-		local name = method and method.Value or 'Raycast'
+		if method and method.Value == 'Arsenal' then
+			local ok = actor()
+			if ok then active = 'Arsenal' end
+			return ok
+		end
 		local kind = hook and hook.Value or 'Hookmetamethod'
-		local data = hooks[name]
-		if not data then
-			err = 'The selected cast method is unavailable.'
-			return false
-		end
-		if data.NoNamecall or kind == 'Function hook' then
-			if not direct(name, data, kind == 'Oth hook') then
-				clear()
-				err = 'The selected function hook could not be installed.'
-				return false
-			end
-			active = name
-			return true
-		end
-		if not attach(kind) then
+		local main
+		if kind == 'Hookmetamethod' then main = meta()
+		elseif kind == 'Oth hook' then main = direct(true)
+		else main = direct(false) end
+		local act = actor()
+		if not main and not act then
+			err = 'Universal hooks could not be installed.'
 			clear()
-			err = 'The selected hook mode could not be installed.'
 			return false
 		end
-		active = name
+		active = 'Universal'
+		sig = token()
 		return true
 	end
 
@@ -583,14 +503,11 @@ return function(ctx)
 		if type(vape) == 'table' and type(vape.CreateNotification) == 'function' then pcall(vape.CreateNotification, vape, 'Magic Bullet', msg, 6, 'warning') end
 	end
 
-	local function refresh()
-		local show = not adapter or adapter.Value ~= 'Arsenal'
-		if method and method.Object then method.Object.Visible = show end
-		if hook and hook.Object then hook.Object.Visible = show end
-	end
-
 	local function reload()
-		refresh()
+		if method and method.Value == 'Arsenal' and hook and hook.Value ~= 'Function hook' then
+			if type(hook.SetValue) == 'function' then hook:SetValue('Function hook') else hook.Value = 'Function hook' end
+			return
+		end
 		if not mod or not mod.Enabled then return end
 		local ok = install()
 		if not ok then
@@ -604,7 +521,7 @@ return function(ctx)
 		autostart = false,
 		tooltip = 'Spoofs the weapon cast origin to just behind the selected target while preserving the original direction.',
 		extratext = function()
-			return active or adapter and adapter.Value == 'Arsenal' and 'Arsenal' or method and method.Value or 'Raycast'
+			return active or method and method.Value or 'Universal'
 		end,
 		func = function(on)
 			if on then
@@ -639,18 +556,13 @@ return function(ctx)
 		Name = 'Target Mode',
 		List = {'Mouse', 'Position'},
 		Default = 'Mouse',
-		Function = paint
+		Function = function() paint() sig = nil end
 	})
-	adapter = make('CreateDropdown', {
-		Name = 'Adapter',
-		List = {'Universal', 'Arsenal'},
-		Default = 'Universal',
-		Function = reload
-	})
+	local methods = ctx.aim and ctx.aim.ars and {'Arsenal', 'Universal'} or {'Universal'}
 	method = make('CreateDropdown', {
 		Name = 'Method',
-		List = {'Raycast', 'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Ray'},
-		Default = 'Raycast',
+		List = methods,
+		Default = methods[1],
 		Function = reload
 	})
 	hook = make('CreateDropdown', {
@@ -659,12 +571,11 @@ return function(ctx)
 		Default = 'Hookmetamethod',
 		Function = reload
 	})
-	refresh()
 	ignored = make('CreateTextList', {Name = 'Ignored Scripts', Default = {'CameraModule'}})
 	fix = make('CreateToggle', {
 		Name = 'RayCamFix',
 		Default = true,
-		Tooltip = 'Skips camera and camera-obstruction casts, including character-to-camera geometry in Ray mode.'
+		Tooltip = 'Skips camera and camera-obstruction casts.'
 	})
 	wall = make('CreateToggle', {Name = 'Wallbang'})
 	range = make('CreateSlider', {
@@ -673,10 +584,10 @@ return function(ctx)
 		Max = 1000,
 		Default = 150,
 		Suffix = function(v) return mode and mode.Value == 'Mouse' and 'px' or v == 1 and 'stud' or 'studs' end,
-		Function = paint
+		Function = function() paint() sig = nil end
 	})
-	chance = make('CreateSlider', {Name = 'Hit Chance', Min = 0, Max = 100, Default = 100, Suffix = '%'})
-	part = make('CreateDropdown', {Name = 'Part', List = {'Head', 'RootPart'}, Default = 'Head'})
+	chance = make('CreateSlider', {Name = 'Hit Chance', Min = 0, Max = 100, Default = 100, Suffix = '%', Function = function() sig = nil end})
+	part = make('CreateDropdown', {Name = 'Part', List = {'Head', 'RootPart'}, Default = 'Head', Function = function() sig = nil end})
 	circle = make('CreateToggle', {
 		Name = 'Range Circle',
 		Function = function(on)
@@ -709,7 +620,24 @@ return function(ctx)
 		Function = paint
 	})
 
-	ctx:clean(run.RenderStepped:Connect(paint))
+	if ctx.aim and ctx.aim.ars then
+		task.defer(function()
+			if method and method.Value ~= 'Arsenal' and type(method.SetValue) == 'function' then method:SetValue('Arsenal') end
+			if hook and hook.Value ~= 'Function hook' and type(hook.SetValue) == 'function' then hook:SetValue('Function hook') end
+		end)
+	end
+	ctx:clean(run.RenderStepped:Connect(function()
+		paint()
+		if not mod.Enabled then return end
+		local now = os.clock()
+		if now - clock < 0.25 then return end
+		clock = now
+		local val = token()
+		if val ~= sig then
+			sig = val
+			actor()
+		end
+	end))
 	ctx:clean(erase)
 	ctx:clean(clear)
 end

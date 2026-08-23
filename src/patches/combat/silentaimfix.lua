@@ -374,4 +374,87 @@ return function(ctx)
 		if type(val) == 'table' then done = patch:set('Function', wrap, val) else done = patch:set(name, wrap, hooks) end
 		if name == 'Ray' and not done then error('SilentAim Ray transform could not be patched', 0) end
 	end
+	local native = mod.Options and mod.Options.Method
+	local target = mod.Options and mod.Options.Targets
+	local mde = mod.Options and mod.Options.Mode
+	local ran = mod.Options and mod.Options.Range
+	local hitc = mod.Options and mod.Options['Hit Chance']
+	local headc = mod.Options and mod.Options['Headshot Chance']
+
+	local function cfg()
+		return {
+			mode = mde and mde.Value or 'Mouse',
+			range = ran and ran.Value or 150,
+			chance = hitc and hitc.Value or 100,
+			head = headc and headc.Value or 65,
+			part = 'Head',
+			walls = target and target.Walls and target.Walls.Enabled == true,
+			players = not target or not target.Players or target.Players.Enabled ~= false
+		}
+	end
+
+	local function meth()
+		if ctx.smethod and type(ctx.smethod.Value) == 'string' then return ctx.smethod.Value end
+		return ctx.aim and ctx.aim.ars and 'Arsenal' or 'Universal'
+	end
+
+	local function token()
+		local val = cfg()
+		return table.concat({
+			meth(),
+			val.mode,
+			tostring(val.range),
+			tostring(val.chance),
+			tostring(val.head),
+			tostring(val.walls),
+			tostring(val.players)
+		}, '|')
+	end
+
+	local function stop()
+		if ctx.aim then ctx.aim:stop('silent') end
+	end
+
+	local function start()
+		if not ctx.aim then return false end
+		local ars = meth() == 'Arsenal'
+		local ok, msg = ctx.aim:start('silent', 'silent', ars, cfg())
+		if not ok and ars then
+			ctx.log:add('patch', 'SilentAimfix', msg or 'Arsenal actor hook could not be installed')
+			local vape = ctx.vapeapi and ctx.vapeapi.object
+			if type(vape) == 'table' and type(vape.CreateNotification) == 'function' then
+				pcall(vape.CreateNotification, vape, 'SilentAim', msg or 'Arsenal actor hook could not be installed.', 6, 'warning')
+			end
+		end
+		return ok
+	end
+
+	local wrap
+	wrap = function(on)
+		if not on then
+			stop()
+			return fn(on)
+		end
+		if native then native.Value = 'Raycast' end
+		start()
+		task.spawn(function()
+			local sig = token()
+			while mod.Enabled do
+				task.wait(0.25)
+				local val = token()
+				if val ~= sig then
+					sig = val
+					start()
+				end
+			end
+		end)
+		local out = table.pack(pcall(fn, on))
+		stop()
+		if not out[1] then error(out[2], 0) end
+		return table.unpack(out, 2, out.n)
+	end
+	if not patch:set('Function', wrap) then error('SilentAim actor wrapper could not be patched', 0) end
+	ctx:clean(stop)
+	patch:set('ExtraText', function() return ctx.smethod and ctx.smethod.Value or ctx.aim and ctx.aim.ars and 'Arsenal' or 'Universal' end)
+
 end

@@ -8,6 +8,8 @@ return function(ctx)
 	end
 	local fun = mod.Options['Function hook']
 	local oth = mod.Options['Oth hook']
+	local native = mod.Options.Method
+	local ray = mod.Options['Raycast Type']
 	local fix = mod.Options.RayCamFix or ctx.raycamfix
 	local use = mod.Options['Use Hitboxes'] or ctx.usehitboxes
 	if type(fun) ~= 'table' or type(oth) ~= 'table' then
@@ -23,13 +25,20 @@ return function(ctx)
 	local fv = fun.Object and fun.Object.Visible
 	local ov = oth.Object and oth.Object.Visible
 	local uv = use and use.Object and use.Object.Visible
+	local nv = native and native.Object and native.Object.Visible
+	local rv = ray and ray.Object and ray.Object.Visible
 	if fun.Object then fun.Object.Visible = false end
 	if oth.Object then oth.Object.Visible = false end
+	if native and native.Object then native.Object.Visible = false end
+	if ray and ray.Object then ray.Object.Visible = false end
+	if native and native.Value ~= 'Raycast' and type(native.SetValue) == 'function' then pcall(native.SetValue, native, 'Raycast') end
 	if fix and fix.Object then fix.Object.Visible = false end
 	if use and use.Object then use.Object.Visible = false end
 	ctx:clean(function()
 		if fun.Object then fun.Object.Visible = fv end
 		if oth.Object then oth.Object.Visible = ov end
+		if native and native.Object then native.Object.Visible = nv end
+		if ray and ray.Object then ray.Object.Visible = rv end
 		if use and use.Object then use.Object.Visible = uv end
 	end)
 	local pane = main:CreateSettingsPane({Name = 'Silent Aim'})
@@ -44,6 +53,35 @@ return function(ctx)
 	end
 	local lock = false
 	local hook
+	local meth
+	local apply
+	local methods = ctx.aim and ctx.aim.ars and {'Arsenal', 'Universal'} or {'Universal'}
+	meth = pane:CreateDropdown({
+		Name = 'Method',
+		List = methods,
+		Function = function(val)
+			if lock then return end
+			if val == 'Arsenal' and hook and hook.Value ~= 'Function hook' and type(apply) == 'function' then
+				lock = true
+				apply('Function hook')
+				if hook.Value ~= 'Function hook' then hook:SetValue('Function hook') end
+				lock = false
+			end
+			if mod.Enabled then
+				lock = true
+				mod:Toggle()
+				mod:Toggle()
+				lock = false
+			end
+		end
+	})
+	ctx.smethod = meth
+	if ctx.aim and ctx.aim.ars then
+		task.defer(function()
+			if meth and meth.Value ~= 'Arsenal' and type(meth.SetValue) == 'function' then meth:SetValue('Arsenal') end
+			if hook and hook.Value ~= 'Function hook' and type(hook.SetValue) == 'function' then hook:SetValue('Function hook') end
+		end)
+	end
 	local function mode()
 		if oth.Enabled then return 'Oth hook' end
 		if fun.Enabled then return 'Function hook' end
@@ -53,7 +91,7 @@ return function(ctx)
 		if opt.Enabled ~= val then opt:Toggle() end
 		return opt.Enabled == val
 	end
-	local function apply(val)
+	apply = function(val)
 		local fe = val == 'Function hook'
 		local oe = val == 'Oth hook'
 		if fun.Enabled == fe and oth.Enabled == oe then return true end
@@ -175,6 +213,7 @@ return function(ctx)
 		end)
 	end
 	ctx:clean(function()
+		if ctx.smethod == meth then ctx.smethod = nil end
 		for obj, val in pairs(map) do
 			if obj.Parent then obj.LayoutOrder = val end
 		end
