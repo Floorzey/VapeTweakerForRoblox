@@ -32,8 +32,6 @@ return function(ctx)
 	local sig
 	local clock = 0
 	local lock = 0
-	local nameold
-	local nameoth = false
 	local funcs = {}
 	local temp = Instance.new('Camera')
 	local cameras = {
@@ -408,33 +406,6 @@ return function(ctx)
 		return table.unpack(out, 2, out.n)
 	end
 
-	local function pick(name)
-		local want = method and method.Value
-		if want == 'Origin Scan' and name == 'Raycast' then return hooks['Origin Scan'], 'Origin Scan' end
-		if want == name then return hooks[name], name end
-	end
-
-	local function namecall(...)
-		if not mod.Enabled or skip() then return base(nameold, ...) end
-		local ok, name = pcall(getnamecallmethod)
-		if not ok then return base(nameold, ...) end
-		local data, label = pick(name)
-		if not data or data.NoNamecall then return base(nameold, ...) end
-		local self, args = ..., {select(2, ...)}
-		if data.Result then
-			local val = base(nameold, self, table.unpack(args))
-			local out, changed = result(data, val)
-			if changed then active = label end
-			return out
-		end
-		local changed, out = apply(data, args)
-		if changed then
-			active = label
-			if type(out) == 'table' then return table.unpack(out) end
-		end
-		return base(nameold, self, table.unpack(args))
-	end
-
 	local function direct(name, data, use)
 		if type(data) ~= 'table' or type(data.Hook) ~= 'function' then return false end
 		local rec = {fn = data.Hook, oth = false}
@@ -481,23 +452,6 @@ return function(ctx)
 		return true
 	end
 
-	local function attach(kind)
-		if nameold or type(getnamecallmethod) ~= 'function' then return false end
-		if kind == 'Oth hook' and oth and type(oth.hook) == 'function' and type(getrawmetatable) == 'function' then
-			local ok, old = pcall(oth.hook, getrawmetatable(game).__namecall, namecall)
-			if ok and type(old) == 'function' then
-				nameold = old
-				nameoth = true
-				return true
-			end
-		end
-		if type(hookmetamethod) ~= 'function' then return false end
-		local ok, old = pcall(hookmetamethod, game, '__namecall', namecall)
-		if not ok or type(old) ~= 'function' then return false end
-		nameold = old
-		return true
-	end
-
 	local function clear()
 		for i = #funcs, 1, -1 do
 			local rec = funcs[i]
@@ -510,17 +464,6 @@ return function(ctx)
 			end
 			funcs[i] = nil
 		end
-		if nameold then
-			if nameoth and oth and type(oth.unhook) == 'function' and type(getrawmetatable) == 'function' then
-				pcall(oth.unhook, getrawmetatable(game).__namecall)
-			elseif type(hookmetamethod) == 'function' then
-				pcall(hookmetamethod, game, '__namecall', nameold)
-			elseif type(restorefunction) == 'function' and type(getrawmetatable) == 'function' then
-				pcall(restorefunction, getrawmetatable(game).__namecall)
-			end
-		end
-		nameold = nil
-		nameoth = false
 		if ctx.aim then ctx.aim:stop('magic') end
 		active = nil
 		lock = 0
@@ -574,13 +517,8 @@ return function(ctx)
 			active = 'Unavailable'
 			return false
 		end
-		local kind = hook and hook.Value or 'Hookmetamethod'
-		local ok
-		if data.NoNamecall or kind == 'Function hook' then
-			ok = direct(want, data, kind == 'Oth hook')
-		else
-			ok = attach(kind)
-		end
+		local kind = hook and hook.Value or 'Function hook'
+		local ok = direct(want, data, kind == 'Oth hook')
 		if not ok then
 			clear()
 			err = 'No compatible hook backend is available.'
@@ -661,8 +599,8 @@ return function(ctx)
 	})
 	hook = make('CreateDropdown', {
 		Name = 'Hook',
-		List = {'Hookmetamethod', 'Function hook', 'Oth hook'},
-		Default = ctx.aim and ctx.aim.ars and 'Function hook' or 'Hookmetamethod',
+		List = {'Function hook', 'Oth hook'},
+		Default = 'Function hook',
 		Function = reload
 	})
 	ignored = make('CreateTextList', {Name = 'Ignored Scripts', Default = {'CameraModule'}})
