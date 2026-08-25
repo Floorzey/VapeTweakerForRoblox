@@ -9,7 +9,6 @@ local paths = {
 	adapter = 'src/adapters/vape.lua',
 	target = 'src/core/target.lua',
 	origin = 'src/core/origin.lua',
-	weapon = 'src/core/weapon.lua',
 	aim = 'src/core/aim.lua',
 	patch = 'src/core/patch.lua',
 	runtime = 'src/core/runtime.lua',
@@ -86,7 +85,6 @@ init.storage(ctx)
 init.adapter(ctx)
 init.target(ctx)
 init.origin(ctx)
-init.weapon(ctx)
 init.aim(ctx)
 init.patch(ctx)
 init.runtime(ctx)

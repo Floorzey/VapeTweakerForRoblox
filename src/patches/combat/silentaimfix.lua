@@ -61,45 +61,36 @@ return function(ctx)
 	end
 
 	local hooks
+	local score = 0
+	local names = {'Raycast', 'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Ray'}
 	local function valid(val)
 		return type(val) == 'function' or type(val) == 'table' and type(val.Function) == 'function'
 	end
-
-	local quietkey = '__vapetweakerquiet'
-	local quietenv = (getgenv and getgenv()) or _G
-	quietenv[quietkey] = type(quietenv[quietkey]) == 'function' and quietenv[quietkey] or function() end
-
-	local function quiet(fn)
-		if type(fn) ~= 'function' then return end
-		if type(getfenv) == 'function' and type(setfenv) == 'function' then
-			local ok2, env = pcall(getfenv, fn)
-			if ok2 and type(env) == 'table' then
-				local proxy = setmetatable({print = quietenv[quietkey], warn = quietenv[quietkey]}, {__index = env, __newindex = env})
-				if pcall(setfenv, fn, proxy) then return end
-			end
-		end
-		local get = debug and debug.getconstants or getconstants
-		local set = debug and debug.setconstant or setconstant
-		if type(get) ~= 'function' or type(set) ~= 'function' then return end
-		local ok2, constants = pcall(get, fn)
-		if not ok2 or type(constants) ~= 'table' then return end
-		for index, value in pairs(constants) do
-			if value == 'print' or value == 'warn' then pcall(set, fn, index, quietkey) end
-		end
-	end
 	for _, val in pairs(ups(fn)) do
-		if type(val) == 'table' and valid(val.Ray) and valid(val.Raycast) and valid(val.ScreenPointToRay) then
+		if type(val) ~= 'table' then continue end
+		local count = 0
+		for _, name in ipairs(names) do
+			if valid(val[name]) then count += 1 end
+		end
+		if count > score then
 			hooks = val
-			break
+			score = count
 		end
 	end
-	if not hooks then
+	if not hooks or score < 3 then
 		ctx.log:add('patch', 'SilentAimfix', 'SilentAim hook table was not found')
 		return
 	end
 
-	for _, val in pairs(hooks) do
-		quiet(type(val) == 'table' and val.Function or val)
+	local baseenv = (getgenv and getgenv()) or _G
+	local quietenv = setmetatable({print = function() end, warn = function() end}, {__index = baseenv, __newindex = baseenv})
+	local function invoke(cur, args, quiet)
+		if quiet and type(trampoline_call) == 'function' then
+			local out = table.pack(trampoline_call(cur, {}, {env = quietenv}, args))
+			if not out[1] then error(out[2], 0) end
+			return table.unpack(out, 2, out.n)
+		end
+		return cur(args)
 	end
 
 	local ray = hooks.Ray
@@ -270,7 +261,7 @@ return function(ctx)
 	end
 
 	local function mouse(sett, name, amount, active)
-		if type(lib) ~= 'table' or not lib.isAlive then table.clear(sett) return end
+		if type(lib) ~= 'table' or lib.isAlive == false or type(lib.List) ~= 'table' then table.clear(sett) return end
 		local cam = workspace.CurrentCamera
 		if not cam then table.clear(sett) return end
 		local cur = sett.MouseOrigin or (input.TouchEnabled and cam.ViewportSize / 2 or input:GetMouseLocation())
@@ -290,12 +281,12 @@ return function(ctx)
 			if not vis then continue end
 			local mag = (cur - Vector2.new(scr.X, scr.Y)).Magnitude
 			if mag > sett.Range then continue end
-			if lib.isVulnerable(ent) then list[#list + 1] = {Entity = ent, Magnitude = ent.Target and -1 or mag} end
+			if type(lib.isVulnerable) ~= 'function' or lib.isVulnerable(ent) then list[#list + 1] = {Entity = ent, Magnitude = ent.Target and -1 or mag} end
 		end
 		table.sort(list, sett.Sort or function(a, b) return a.Magnitude < b.Magnitude end)
 		for _, val in ipairs(list) do
 			local part = val.Entity[name]
-			if sett.Wallcheck and lib.Wallcheck(sett.Origin or origin, part.Position, sett.Wallcheck) then continue end
+			if sett.Wallcheck and type(lib.Wallcheck) == 'function' and lib.Wallcheck(sett.Origin or origin, part.Position, sett.Wallcheck) then continue end
 			table.clear(sett)
 			table.clear(list)
 			return val.Entity
@@ -305,8 +296,14 @@ return function(ctx)
 	end
 
 	local function position(sett, name, amount, active)
-		if type(lib) ~= 'table' or not lib.isAlive then table.clear(sett) return end
-		local origin = sett.Origin or lib.character.HumanoidRootPart.Position
+		if type(lib) ~= 'table' or lib.isAlive == false or type(lib.List) ~= 'table' then table.clear(sett) return end
+		local origin = sett.Origin
+		if typeof(origin) ~= 'Vector3' then
+			local char = lib.character
+			local root = type(char) == 'table' and (char.RootPart or char.HumanoidRootPart)
+			if typeof(root) == 'Instance' and root:IsA('BasePart') then origin = root.Position end
+		end
+		if typeof(origin) ~= 'Vector3' then table.clear(sett) return end
 		local list = {}
 		for _, ent in lib.List do
 			if not sett.Players and ent.Player then continue end
@@ -316,12 +313,12 @@ return function(ctx)
 			if typeof(part) ~= 'Instance' or not part:IsA('BasePart') then continue end
 			local mag = (point(part, origin, amount, active) - origin).Magnitude
 			if mag > sett.Range then continue end
-			if lib.isVulnerable(ent) then list[#list + 1] = {Entity = ent, Magnitude = ent.Target and -1 or mag} end
+			if type(lib.isVulnerable) ~= 'function' or lib.isVulnerable(ent) then list[#list + 1] = {Entity = ent, Magnitude = ent.Target and -1 or mag} end
 		end
 		table.sort(list, sett.Sort or function(a, b) return a.Magnitude < b.Magnitude end)
 		for _, val in ipairs(list) do
 			local part = val.Entity[name]
-			if sett.Wallcheck and lib.Wallcheck(origin, part.Position, sett.Wallcheck) then continue end
+			if sett.Wallcheck and type(lib.Wallcheck) == 'function' and lib.Wallcheck(origin, part.Position, sett.Wallcheck) then continue end
 			table.clear(sett)
 			table.clear(list)
 			return val.Entity
@@ -330,10 +327,10 @@ return function(ctx)
 		table.clear(list)
 	end
 
-	local function call(cur, args)
-		if not use or not use.Enabled or type(lib) ~= 'table' then return cur(args) end
+	local function call(cur, args, quiet)
+		if not use or not use.Enabled or type(lib) ~= 'table' then return invoke(cur, args, quiet) end
 		local name, amount, active = data()
-		if not name or type(lib.EntityMouse) ~= 'function' or type(lib.EntityPosition) ~= 'function' then return cur(args) end
+		if not name or type(lib.EntityMouse) ~= 'function' or type(lib.EntityPosition) ~= 'function' then return invoke(cur, args, quiet) end
 		local oldm = lib.EntityMouse
 		local oldp = lib.EntityPosition
 		local hv = head and head.Value
@@ -346,7 +343,7 @@ return function(ctx)
 			auto.Enabled = false
 			if chance then chance.Value = 100 end
 		end
-		local out = table.pack(pcall(cur, args))
+		local out = table.pack(pcall(invoke, cur, args, quiet))
 		lib.EntityMouse = oldm
 		lib.EntityPosition = oldp
 		if head then head.Value = hv end
@@ -363,7 +360,7 @@ return function(ctx)
 		if name == 'Ray' then
 			wrap = function(args)
 				if fix and fix.Enabled and bypass(args[1], args[2]) then return end
-				return call(cur, args)
+				return call(cur, args, true)
 			end
 		else
 			wrap = function(args)
@@ -372,12 +369,15 @@ return function(ctx)
 		end
 		local done
 		if type(val) == 'table' then done = patch:set('Function', wrap, val) else done = patch:set(name, wrap, hooks) end
-		if name == 'Ray' and not done then error('SilentAim Ray transform could not be patched', 0) end
+		if name == 'Ray' and not done then ctx.log:add('patch', 'SilentAimfix', 'SilentAim Ray transform could not be patched') end
 	end
 
 	local method = mod.Options and mod.Options.Method
 	local info = ctx.vape and ctx.vape.Libraries and ctx.vape.Libraries.targetinfo
-	local base = {'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Raycast', 'Ray'}
+	local base = {}
+	for _, name in ipairs({'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Raycast', 'Ray'}) do
+		if valid(hooks[name]) then base[#base + 1] = name end
+	end
 
 	local function locate(origin, dir)
 		if type(lib) ~= 'table' or type(lib.List) ~= 'table' or typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or dir.Magnitude <= 0.001 then return end
@@ -437,8 +437,10 @@ return function(ctx)
 		busy = false
 	end
 
-	if type(method) == 'table' and type(method.Change) == 'function' and type(ctx.origin) == 'table' then
-		local val = {Hook = workspace.Raycast, Function = scan, NoNamecall = true}
+	local raycast
+	pcall(function() raycast = workspace.Raycast end)
+	if type(method) == 'table' and type(method.Change) == 'function' and type(ctx.origin) == 'table' and type(raycast) == 'function' then
+		local val = {Hook = raycast, Function = scan, NoNamecall = true}
 		if patch:set('Origin Scan', val, hooks) then
 			local list = table.clone(base)
 			list[#list + 1] = 'Origin Scan'
