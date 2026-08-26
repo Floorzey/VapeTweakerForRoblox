@@ -2,8 +2,6 @@ local ld = ...
 if type(ld) ~= 'table' or type(ld.run) ~= 'function' then error('invalid VapeTweaker loader', 0) end
 
 local env = (getgenv and getgenv()) or _G
-local ad={Name="Adonis",Game="*",}local at={}function ad.dt()if not getreg or not getgc or not isfunctionhooked then return false end local ad=false for _,th in getreg()do if typeof(th)~="thread"then continue end local sr=debug.info(th,1,"s")if sr and(sr:match(".Core.Anti")or sr:match(".Plugins.Anti_Cheat"))then ad=true table.insert(at,th)end end return ad end function ad.bp()for _,th in at do pcall(coroutine.close,th)end local tb={}if filtergc then local ct=filtergc("table",{Keys={"Detected","RLocked"}},false)for _,tl in ct do if typeof(rawget(tl,"Detected"))~="function"then continue end table.insert(tb,tl)end else for _,tl in getgc(true)do if typeof(tl)~="table"then continue end local io=typeof(rawget(tl,"Detected"))=="function"and rawget(tl,"RLocked")if not io then continue end table.insert(tb,tl)end end for _,tl in tb do for _,df in tl do if typeof(df)~="function"or isfunctionhooked(df)then continue end wax.shared.Hooks[df]=wax.shared.Hooking.HookFunction(df,function(ac,if,no)coroutine.yield()return task.wait(9e9)end)end end return true end if ad.dt()then ad.bp()end
-
 local paths = {
 	log = 'src/core/log.lua',
 	clean = 'src/core/clean.lua',
