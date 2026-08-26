@@ -357,12 +357,12 @@ return function(ctx)
 		if pos then return new(pos, beam.Direction) end
 	end
 
-	if rc then hooks.Raycast = {Hook = rc, Args = raycast} end
-	if fr and new then hooks.FindPartOnRay = {Hook = fr, Args = legacy} end
-	if fi and new then hooks.FindPartOnRayWithIgnoreList = {Hook = fi, Args = legacy} end
-	if fw and new then hooks.FindPartOnRayWithWhitelist = {Hook = fw, Args = legacy} end
-	if sr and new then hooks.ScreenPointToRay = {Hook = sr, Result = screen} end
-	if vr and new then hooks.ViewportPointToRay = {Hook = vr, Result = screen} end
+	if rc then hooks.Raycast = {Hook = rc, Args = raycast, Meta = 'Raycast', Owner = workspace} end
+	if fr and new then hooks.FindPartOnRay = {Hook = fr, Args = legacy, Meta = 'FindPartOnRay', Owner = workspace} end
+	if fi and new then hooks.FindPartOnRayWithIgnoreList = {Hook = fi, Args = legacy, Meta = 'FindPartOnRayWithIgnoreList', Owner = workspace} end
+	if fw and new then hooks.FindPartOnRayWithWhitelist = {Hook = fw, Args = legacy, Meta = 'FindPartOnRayWithWhitelist', Owner = workspace} end
+	if sr and new then hooks.ScreenPointToRay = {Hook = sr, Result = screen, Meta = 'ScreenPointToRay', Class = 'Camera'} end
+	if vr and new then hooks.ViewportPointToRay = {Hook = vr, Result = screen, Meta = 'ViewportPointToRay', Class = 'Camera'} end
 	if new then
 		hooks.Ray = {
 			Hook = new,
@@ -377,7 +377,7 @@ return function(ctx)
 		}
 	end
 	if rc and ctx.origin and type(ctx.origin.line) == 'function' then
-		hooks['Origin Scan'] = {Hook = rc, Args = function(args) return raycast(args, true) end}
+		hooks['Origin Scan'] = {Hook = rc, Args = function(args) return raycast(args, true) end, Meta = 'Raycast', Owner = workspace}
 	end
 
 	local function apply(data, args)
@@ -452,10 +452,54 @@ return function(ctx)
 		return true
 	end
 
+	local function meta(name, data)
+		if type(data) ~= 'table' or type(data.Hook) ~= 'function' or data.NoNamecall then return false end
+		if type(hookmetamethod) ~= 'function' or type(getnamecallmethod) ~= 'function' then return false end
+		local mt = type(getrawmetatable) == 'function' and getrawmetatable(game) or nil
+		local fn = type(mt) == 'table' and mt.__namecall or nil
+		if type(fn) ~= 'function' then return false end
+		local rec = {fn = fn, meta = true}
+		local expect = data.Meta or name
+		local old = fn
+		local function wrap(self, ...)
+			local call = getnamecallmethod()
+			if call ~= expect then return old(self, ...) end
+			if data.Owner and self ~= data.Owner then return old(self, ...) end
+			if data.Class and (typeof(self) ~= 'Instance' or self.ClassName ~= data.Class) then return old(self, ...) end
+			if not mod.Enabled or skip() then return base(data.Hook, self, ...) end
+			local args = { ... }
+			if data.Result then
+				local val = base(data.Hook, self, table.unpack(args))
+				local out, changed = result(data, val)
+				if changed then active = name end
+				return out
+			end
+			local changed, out = apply(data, args)
+			if changed then
+				active = name
+				if type(out) == 'table' then return table.unpack(out) end
+			end
+			return base(data.Hook, self, table.unpack(args))
+		end
+		local cb = type(newcclosure) == 'function' and newcclosure(wrap) or wrap
+		local ok, val = pcall(hookmetamethod, game, '__namecall', cb)
+		if not ok or type(val) ~= 'function' then return false end
+		old = val
+		rec.old = val
+		funcs[#funcs + 1] = rec
+		return true
+	end
+
 	local function clear()
 		for i = #funcs, 1, -1 do
 			local rec = funcs[i]
-			if rec.oth and oth and type(oth.unhook) == 'function' then
+			if rec.meta then
+				if type(restorefunction) == 'function' then
+					pcall(restorefunction, rec.fn)
+				elseif type(hookmetamethod) == 'function' and type(rec.old) == 'function' then
+					pcall(hookmetamethod, game, '__namecall', rec.old)
+				end
+			elseif rec.oth and oth and type(oth.unhook) == 'function' then
 				pcall(oth.unhook, rec.fn)
 			elseif type(hookfunction) == 'function' and type(rec.old) == 'function' then
 				pcall(hookfunction, rec.fn, rec.old)
@@ -518,7 +562,17 @@ return function(ctx)
 			return false
 		end
 		local kind = hook and hook.Value or 'Function hook'
-		local ok = direct(want, data, kind == 'Oth hook')
+		if kind == 'Hookmetamethod' and data.NoNamecall then
+			err = 'Hookmetamethod cannot intercept this method.'
+			active = 'Unavailable'
+			return false
+		end
+		local ok
+		if kind == 'Hookmetamethod' then
+			ok = meta(want, data)
+		else
+			ok = direct(want, data, kind == 'Oth hook')
+		end
 		if not ok then
 			clear()
 			err = 'No compatible hook backend is available.'
@@ -599,7 +653,7 @@ return function(ctx)
 	})
 	hook = make('CreateDropdown', {
 		Name = 'Hook',
-		List = {'Function hook', 'Oth hook'},
+		List = {'Function hook', 'Hookmetamethod', 'Oth hook'},
 		Default = 'Function hook',
 		Function = reload
 	})
