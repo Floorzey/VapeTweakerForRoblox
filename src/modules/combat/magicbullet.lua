@@ -4,6 +4,7 @@ return function(ctx)
 	local mode
 	local method
 	local strategy
+	local hookmode
 	local raytype
 	local ignored
 	local range
@@ -26,6 +27,12 @@ return function(ctx)
 	local cameraProbe = Instance.new('Camera')
 	local white = RaycastParams.new()
 	white.FilterType = Enum.RaycastFilterType.Include
+	local othlib
+	do
+		local env = type(getgenv) == 'function' and getgenv() or _G
+		othlib = type(env) == 'table' and rawget(env, 'oth') or nil
+		if type(othlib) ~= 'table' and type(_G) == 'table' then othlib = rawget(_G, 'oth') end
+	end
 
 	local function get(obj, key)
 		if obj == nil then return end
@@ -45,6 +52,7 @@ return function(ctx)
 	local metafn
 	local oldnamecall
 	local metahooked = false
+	local metaOth = false
 	local bypass = 0
 	local active
 	local lastError
@@ -314,9 +322,18 @@ return function(ctx)
 		return value, false
 	end
 
-	local function installFunction(name, data)
-		if type(hookfunction) ~= 'function' or type(data.Hook) ~= 'function' then return false end
-		local rec = {name = name, fn = data.Hook}
+	local function hookConfig()
+		local value = hookmode and hookmode.Value or 'Namecall'
+		local useOth = value:sub(1, 4) == 'Oth '
+		if useOth then value = value:sub(5) end
+		return value, useOth
+	end
+
+	local function installFunction(name, data, useOth)
+		if type(data.Hook) ~= 'function' then return false end
+		local hooker = useOth and type(othlib) == 'table' and othlib.hook or hookfunction
+		if type(hooker) ~= 'function' then return false end
+		local rec = {name = name, fn = data.Hook, oth = useOth == true}
 
 		local function wrapper(...)
 			if not rec.old then return data.Hook(...) end
@@ -351,7 +368,7 @@ return function(ctx)
 		end
 
 		local callback = type(newcclosure) == 'function' and newcclosure(wrapper) or wrapper
-		local ok, old = pcall(hookfunction, data.Hook, callback)
+		local ok, old = pcall(hooker, data.Hook, callback)
 		if not ok or type(old) ~= 'function' then return false end
 		rec.old = old
 		hooks[#hooks + 1] = rec
@@ -387,23 +404,33 @@ return function(ctx)
 		return base(oldnamecall, self, table.unpack(args))
 	end
 
-	local function installMeta()
-		if type(hookmetamethod) ~= 'function' or type(getnamecallmethod) ~= 'function' or type(getrawmetatable) ~= 'function' then return false end
+	local function installMeta(useOth)
+		if type(getnamecallmethod) ~= 'function' or type(getrawmetatable) ~= 'function' then return false end
 		local mt = getrawmetatable(game)
 		metafn = type(mt) == 'table' and mt.__namecall or nil
 		if type(metafn) ~= 'function' then return false end
 		local callback = type(newcclosure) == 'function' and newcclosure(namecallHandler) or namecallHandler
-		local ok, old = pcall(hookmetamethod, game, '__namecall', callback)
+		local ok, old
+		if useOth then
+			if type(othlib) ~= 'table' or type(othlib.hook) ~= 'function' then return false end
+			ok, old = pcall(othlib.hook, metafn, callback)
+		else
+			if type(hookmetamethod) ~= 'function' then return false end
+			ok, old = pcall(hookmetamethod, game, '__namecall', callback)
+		end
 		if not ok or type(old) ~= 'function' then return false end
 		oldnamecall = old
 		metahooked = true
+		metaOth = useOth == true
 		return true
 	end
 
 	local function clear()
 		for i = #hooks, 1, -1 do
 			local rec = hooks[i]
-			if type(restorefunction) == 'function' then
+			if rec.oth and type(othlib) == 'table' and type(othlib.unhook) == 'function' then
+				pcall(othlib.unhook, rec.fn)
+			elseif type(restorefunction) == 'function' then
 				pcall(restorefunction, rec.fn)
 			elseif type(hookfunction) == 'function' and type(rec.old) == 'function' then
 				pcall(hookfunction, rec.fn, rec.old)
@@ -412,7 +439,9 @@ return function(ctx)
 		end
 
 		if metahooked then
-			if type(restorefunction) == 'function' and type(metafn) == 'function' then
+			if metaOth and type(othlib) == 'table' and type(othlib.unhook) == 'function' and type(metafn) == 'function' then
+				pcall(othlib.unhook, metafn)
+			elseif type(restorefunction) == 'function' and type(metafn) == 'function' then
 				pcall(restorefunction, metafn)
 			elseif type(hookmetamethod) == 'function' and type(oldnamecall) == 'function' then
 				pcall(hookmetamethod, game, '__namecall', oldnamecall)
@@ -422,6 +451,7 @@ return function(ctx)
 		metafn = nil
 		oldnamecall = nil
 		metahooked = false
+		metaOth = false
 		bypass = 0
 		active = nil
 	end
@@ -437,12 +467,21 @@ return function(ctx)
 			return false
 		end
 
+		local modeValue, useOth = hookConfig()
+		if useOth and (type(othlib) ~= 'table' or type(othlib.hook) ~= 'function') then
+			lastError = 'Oth hook is unavailable.'
+			return false
+		end
+
+		local wantNamecall = modeValue == 'Namecall' or modeValue == 'Both'
+		local wantFunction = modeValue == 'Function' or modeValue == 'Both' or data.NoNamecall
 		local count = 0
-		if not data.NoNamecall and installMeta() then count += 1 end
-		if type(data.Hook) == 'function' and installFunction(wanted, data) then count += 1 end
+
+		if wantNamecall and not data.NoNamecall and installMeta(useOth) then count += 1 end
+		if wantFunction and type(data.Hook) == 'function' and installFunction(wanted, data, useOth) then count += 1 end
 
 		if count == 0 then
-			lastError = 'No compatible hook backend is available.'
+			lastError = data.NoNamecall and 'This method requires a function hook.' or 'No compatible hook backend is available.'
 			return false
 		end
 		return true
@@ -526,6 +565,17 @@ return function(ctx)
 		Name = 'Strategy',
 		List = {'SilentAim', 'MagicBullet'},
 		Default = 'SilentAim'
+	})
+	hookmode = make('CreateDropdown', {
+		Name = 'Hook Mode',
+		List = {'Namecall', 'Function', 'Both', 'Oth Namecall', 'Oth Function', 'Oth Both'},
+		Default = 'Namecall',
+		Function = function()
+			active = nil
+			if mod and mod.Enabled then
+				if not install() then notify(lastError) end
+			end
+		end
 	})
 	raytype = make('CreateDropdown', {
 		Name = 'Raycast Type',
