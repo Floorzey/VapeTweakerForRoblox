@@ -24,7 +24,7 @@ return function(ctx)
 		name = 'RayCamFix',
 		default = true,
 		darker = true,
-		tooltip = 'Prevents ray hooks from redirecting camera, control, spectate and camera-obstruction casts.'
+		tooltip = 'Prevents Ray.new hooks from redirecting camera, control, spectate and camera-obstruction casts.'
 	})
 	if fix then patch:visible(fix, false) end
 	ctx.raycamfix = fix
@@ -93,7 +93,6 @@ return function(ctx)
 		return cur(args)
 	end
 
-	local ray = hooks.Ray
 	local exact = {
 		basecamera = true,
 		camerainput = true,
@@ -232,6 +231,7 @@ return function(ctx)
 	local head = mod.Options and mod.Options['Headshot Chance']
 	local chance = mod.Options and mod.Options['Hit Chance']
 	local auto = mod.Options and mod.Options.AutoFire
+	local projectile = mod.Options and mod.Options.Projectile
 
 	local function data()
 		if type(hit) ~= 'table' or type(hit.Options) ~= 'table' then return end
@@ -327,128 +327,270 @@ return function(ctx)
 		table.clear(list)
 	end
 
-	local function call(cur, args, quiet)
-		if not use or not use.Enabled or type(lib) ~= 'table' then return invoke(cur, args, quiet) end
-		local name, amount, active = data()
-		if not name or type(lib.EntityMouse) ~= 'function' or type(lib.EntityPosition) ~= 'function' then return invoke(cur, args, quiet) end
+	local function magic()
+		local state = ctx.magicbullet
+		if type(state) ~= 'table' or state.enabled ~= true then return nil end
+		if type(state.module) == 'table' and state.module.Enabled ~= true then return nil end
+		return state
+	end
+
+	local function call(cur, args, quiet, capture)
+		local captureon = type(capture) == 'table'
+		local custom = use and use.Enabled and type(lib) == 'table'
+		if not captureon and not custom then return invoke(cur, args, quiet) end
+		if type(lib) ~= 'table' or type(lib.EntityMouse) ~= 'function' or type(lib.EntityPosition) ~= 'function' then
+			return invoke(cur, args, quiet)
+		end
+
 		local oldm = lib.EntityMouse
 		local oldp = lib.EntityPosition
+		local name, amount, active = data()
+		custom = custom and type(name) == 'string' and amount ~= nil
 		local hv = head and head.Value
 		local cv = chance and chance.Value
 		local av = auto and auto.Enabled
-		lib.EntityMouse = function(sett) return mouse(sett, name, amount, active) end
-		lib.EntityPosition = function(sett) return position(sett, name, amount, active) end
-		if head then head.Value = name == 'Head' and 100 or 0 end
-		if auto and av then
-			auto.Enabled = false
-			if chance then chance.Value = 100 end
+
+		local function record(fn)
+			return function(sett)
+				local ent = fn(sett)
+				if captureon and ent then capture.entity = ent end
+				return ent
+			end
 		end
+
+		if custom then
+			lib.EntityMouse = record(function(sett) return mouse(sett, name, amount, active) end)
+			lib.EntityPosition = record(function(sett) return position(sett, name, amount, active) end)
+			if head then head.Value = name == 'Head' and 100 or 0 end
+			if auto and av then
+				auto.Enabled = false
+				if chance then chance.Value = 100 end
+			end
+		else
+			lib.EntityMouse = record(oldm)
+			lib.EntityPosition = record(oldp)
+		end
+
 		local out = table.pack(pcall(invoke, cur, args, quiet))
 		lib.EntityMouse = oldm
 		lib.EntityPosition = oldp
-		if head then head.Value = hv end
-		if chance then chance.Value = cv end
-		if auto then auto.Enabled = av end
+		if custom then
+			if head then head.Value = hv end
+			if chance then chance.Value = cv end
+			if auto then auto.Enabled = av end
+		end
 		if not out[1] then error(out[2], 0) end
 		return table.unpack(out, 2, out.n)
+	end
+
+	local function entitypart(ent, name)
+		if type(ent) ~= 'table' or type(name) ~= 'string' then return end
+		local part = ent[name]
+		if typeof(part) == 'Instance' and part:IsA('BasePart') then return part end
+		if name == 'RootPart' then
+			part = ent.HumanoidRootPart
+			if typeof(part) == 'Instance' and part:IsA('BasePart') then return part end
+		end
+		local char = ent.Character
+		if typeof(char) ~= 'Instance' then return end
+		local wanted = name == 'RootPart' and 'HumanoidRootPart' or name
+		part = char:FindFirstChild(wanted)
+		if typeof(part) == 'Instance' and part:IsA('BasePart') then return part end
+	end
+
+	local function hintpart(params, ent)
+		if typeof(params) ~= 'RaycastParams' or type(ent) ~= 'table' then return end
+		local char = ent.Character
+		if typeof(char) ~= 'Instance' then return end
+		local ok2, list = pcall(function() return params.FilterDescendantsInstances end)
+		if not ok2 or type(list) ~= 'table' then return end
+		for _, obj in ipairs(list) do
+			if typeof(obj) == 'Instance' then
+				if obj:IsA('BasePart') and obj:IsDescendantOf(char) then return obj end
+				if obj == char then
+					local hname = data()
+					return entitypart(ent, hname) or entitypart(ent, 'Head') or entitypart(ent, 'RootPart')
+				end
+			end
+		end
+	end
+
+	local function pickpart(ent, origin, dir, hinted)
+		if typeof(hinted) == 'Instance' and hinted:IsA('BasePart') then return hinted end
+		if type(ent) ~= 'table' or typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or dir.Magnitude <= 0.001 then return end
+		local unit = dir.Unit
+		local order = {}
+		local seen = {}
+		local hname = data()
+		for _, name in ipairs({hname, 'Head', 'RootPart', 'HumanoidRootPart'}) do
+			if type(name) == 'string' and not seen[name] then
+				seen[name] = true
+				order[#order + 1] = name
+			end
+		end
+		local best
+		local score = math.huge
+		for _, name in ipairs(order) do
+			local part = entitypart(ent, name)
+			if not part then continue end
+			local rel = part.Position - origin
+			local along = rel:Dot(unit)
+			if along < -2 then continue end
+			local closest = origin + unit * math.max(along, 0)
+			local dist = (part.Position - closest).Magnitude
+			if dist < score then
+				score = dist
+				best = part
+			end
+		end
+		if not best then return end
+		local limit = math.max(3, best.Size.Magnitude * 0.8)
+		if score <= limit then return best end
+	end
+
+	local function fallbackline(part, dir)
+		if typeof(part) ~= 'Instance' or not part:IsA('BasePart') or typeof(dir) ~= 'Vector3' or dir.Magnitude <= 0.001 then return end
+		local unit = dir.Unit
+		local vec = part.CFrame:VectorToObjectSpace(unit)
+		local half = part.Size * 0.5
+		local dist = math.abs(vec.X) * half.X + math.abs(vec.Y) * half.Y + math.abs(vec.Z) * half.Z
+		return part.Position - unit * (dist + 0.05)
+	end
+
+	local function moveorigin(origin, dir, part, state)
+		if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or dir.Magnitude <= 0.001 then return end
+		if typeof(part) ~= 'Instance' or not part:IsA('BasePart') then return end
+		local api = ctx.origin
+		local mode = state and state.mode or 'Near Target'
+
+		if mode == 'Origin Scan' and type(api) == 'table' and type(api.scan) == 'function' then
+			local char = type(lib) == 'table' and lib.character
+			local root = type(char) == 'table' and (char.RootPart or char.HumanoidRootPart)
+			local start = typeof(root) == 'Instance' and root:IsA('BasePart') and root.Position or origin
+			local ok2, pos = pcall(api.scan, api, start, part.Position, origin, part)
+			if ok2 and typeof(pos) == 'Vector3' then
+				local delta = part.Position - pos
+				if delta.Magnitude > 0.001 then return pos, delta.Unit * dir.Magnitude end
+			end
+		end
+
+		local pos
+		if type(api) == 'table' and type(api.line) == 'function' then
+			local ok2, val = pcall(api.line, api, part.Position, dir, part)
+			if ok2 and typeof(val) == 'Vector3' then pos = val end
+		end
+		pos = pos or fallbackline(part, dir)
+		if pos then return pos, dir end
+	end
+
+	local function transformvector(origin, dir, ent, hinted, state)
+		if projectile and projectile.Enabled then return end
+		local part = pickpart(ent, origin, dir, hinted)
+		if not part then return end
+		return moveorigin(origin, dir, part, state)
+	end
+
+	local function wrapraycast(cur)
+		return function(args)
+			local state = magic()
+			if not state then return call(cur, args) end
+			local origin = args[1]
+			local capture = {}
+			local out = table.pack(call(cur, args, false, capture))
+			if capture.entity and typeof(origin) == 'Vector3' and typeof(args[2]) == 'Vector3' then
+				local hint = hintpart(args[3], capture.entity)
+				local pos, dir = transformvector(origin, args[2], capture.entity, hint, state)
+				if pos then
+					args[1] = pos
+					args[2] = dir
+				end
+			end
+			return table.unpack(out, 1, out.n)
+		end
+	end
+
+	local function wraplegacy(cur)
+		return function(args)
+			local state = magic()
+			if not state then return call(cur, args) end
+			local beam = args[1]
+			local origin = typeof(beam) == 'Ray' and beam.Origin or nil
+			local capture = {}
+			local out = table.pack(call(cur, args, false, capture))
+			if out.n > 0 and out[1] ~= nil then return table.unpack(out, 1, out.n) end
+			beam = args[1]
+			if capture.entity and typeof(beam) == 'Ray' and typeof(origin) == 'Vector3' then
+				local pos, dir = transformvector(origin, beam.Direction, capture.entity, nil, state)
+				if pos then args[1] = Ray.new(pos, dir) end
+			end
+			return table.unpack(out, 1, out.n)
+		end
+	end
+
+	local function wrapcamera(cur)
+		return function(args)
+			local state = magic()
+			if not state then return call(cur, args) end
+			local capture = {}
+			local out = table.pack(call(cur, args, false, capture))
+			if capture.entity and type(out[1]) == 'table' and typeof(out[1][1]) == 'Ray' then
+				local beam = out[1][1]
+				local part = pickpart(capture.entity, beam.Origin, beam.Direction)
+				if part and state.mode == 'Origin Scan' then
+					local pos, dir = moveorigin(beam.Origin, beam.Direction, part, state)
+					if pos then out[1][1] = Ray.new(pos, dir) end
+				end
+			end
+			return table.unpack(out, 1, out.n)
+		end
+	end
+
+	local function wrapray(cur)
+		return function(args)
+			if fix and fix.Enabled and bypass(args[1], args[2]) then return end
+			local state = magic()
+			if not state then return call(cur, args, true) end
+			local origin = args[1]
+			local capture = {}
+			local out = table.pack(call(cur, args, true, capture))
+			if capture.entity and typeof(origin) == 'Vector3' and typeof(args[2]) == 'Vector3' then
+				local pos, dir = transformvector(origin, args[2], capture.entity, nil, state)
+				if pos then
+					args[1] = pos
+					args[2] = dir
+				end
+			end
+			return table.unpack(out, 1, out.n)
+		end
 	end
 
 	for name, val in pairs(hooks) do
 		local cur = type(val) == 'table' and val.Function or val
 		if type(cur) ~= 'function' then continue end
 		local wrap
-		if name == 'Ray' then
-			wrap = function(args)
-				if fix and fix.Enabled and bypass(args[1], args[2]) then return end
-				return call(cur, args, true)
-			end
+		if name == 'Raycast' then
+			wrap = wrapraycast(cur)
+		elseif name == 'FindPartOnRay' or name == 'FindPartOnRayWithIgnoreList' or name == 'FindPartOnRayWithWhitelist' then
+			wrap = wraplegacy(cur)
+		elseif name == 'ScreenPointToRay' or name == 'ViewportPointToRay' then
+			wrap = wrapcamera(cur)
+		elseif name == 'Ray' then
+			wrap = wrapray(cur)
 		else
-			wrap = function(args)
-				return call(cur, args)
-			end
+			wrap = function(args) return call(cur, args) end
 		end
 		local done
 		if type(val) == 'table' then done = patch:set('Function', wrap, val) else done = patch:set(name, wrap, hooks) end
 		if name == 'Ray' and not done then ctx.log:add('patch', 'SilentAimfix', 'SilentAim Ray transform could not be patched') end
 	end
 
-	local method = mod.Options and mod.Options.Method
-	local info = ctx.vape and ctx.vape.Libraries and ctx.vape.Libraries.targetinfo
-	local base = {}
-	for _, name in ipairs({'FindPartOnRay', 'FindPartOnRayWithIgnoreList', 'FindPartOnRayWithWhitelist', 'ScreenPointToRay', 'ViewportPointToRay', 'Raycast', 'Ray'}) do
-		if valid(hooks[name]) then base[#base + 1] = name end
-	end
-
-	local function locate(origin, dir)
-		if type(lib) ~= 'table' or type(lib.List) ~= 'table' or typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' or dir.Magnitude <= 0.001 then return end
-		local unit = dir.Unit
-		local best
-		local score = math.huge
-		local names = {'Head', 'RootPart'}
-		local hname = data()
-		if type(hname) == 'string' and not table.find(names, hname) then table.insert(names, 1, hname) end
-		local now = tick()
-		for _, ent in lib.List do
-			if not ent.Targetable then continue end
-			if type(lib.isVulnerable) == 'function' and not lib.isVulnerable(ent) then continue end
-			for _, name in names do
-				local part = ent[name]
-				if typeof(part) ~= 'Instance' or not part:IsA('BasePart') then continue end
-				local rel = part.Position - origin
-				local along = rel:Dot(unit)
-				if along < 0 or along > dir.Magnitude + 32 then continue end
-				local near = origin + unit * along
-				local dist = (part.Position - near).Magnitude
-				local live = type(info) == 'table' and type(info.Targets) == 'table' and tonumber(info.Targets[ent]) or 0
-				local val = dist - (live > now and 1000 or 0)
-				if val < score then
-					score = val
-					best = part
-				end
-			end
-		end
-		if best and score < 24 then return best end
-		if best and score < -900 then return best end
-	end
-
-	local busy = false
-	local function scan(args)
-		if busy or args[1] ~= workspace then return end
-		local origin, dir = args[2], args[3]
-		if typeof(origin) ~= 'Vector3' or typeof(dir) ~= 'Vector3' then return end
-		if fix and fix.Enabled and bypass(origin, dir) then return end
-		busy = true
-		local vals = {origin, dir, args[4]}
-		local ok, out = pcall(hooks.Raycast.Function, vals)
-		if not ok then busy = false return end
-		if out then busy = false return out end
-		if typeof(vals[2]) ~= 'Vector3' or vals[2] == dir then busy = false return end
-		local part = locate(origin, vals[2])
-		local root = type(lib) == 'table' and lib.character and (lib.character.RootPart or lib.character.HumanoidRootPart)
-		local start = typeof(root) == 'Instance' and root.Position or origin
-		local pos
-		if part and ctx.origin and type(ctx.origin.scan) == 'function' then
-			local ok2, val = pcall(ctx.origin.scan, ctx.origin, start, part.Position, nil, part)
-			if ok2 then pos = val end
-		end
-		args[2] = pos or origin
-		args[3] = vals[2]
-		args[4] = vals[3]
-		busy = false
-	end
-
-	local raycast
-	pcall(function() raycast = workspace.Raycast end)
-	if type(method) == 'table' and type(method.Change) == 'function' and type(ctx.origin) == 'table' and type(raycast) == 'function' then
-		local val = {Hook = raycast, Function = scan, NoNamecall = true}
-		if patch:set('Origin Scan', val, hooks) then
-			local list = table.clone(base)
-			list[#list + 1] = 'Origin Scan'
-			pcall(method.Change, method, list)
-			ctx:clean(function()
-				if method.Value == 'Origin Scan' and type(method.SetValue) == 'function' then pcall(method.SetValue, method, 'Raycast') end
-				pcall(method.Change, method, base)
-			end)
-		end
-	end
+	local fixstate = {
+		ready = true,
+		hooks = hooks,
+		patch = patch
+	}
+	ctx.silentaimfix = fixstate
+	ctx:clean(function()
+		if ctx.silentaimfix == fixstate then ctx.silentaimfix = nil end
+	end)
 end
